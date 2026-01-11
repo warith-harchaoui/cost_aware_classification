@@ -1,0 +1,992 @@
+"""
+examples.fraud_detection
+==================================
+
+Benchmark runner for IEEE-CIS (Kaggle) fraud detection comparing:
+
+- cross_entropy
+- cross_entropy_weighted (sample-weighted CE with w_i = C_i[y_i, 1-y_i])
+- sinkhorn_fenchel_young (Fenchel–Young / Sinkhorn-FY-style)
+- sinkhorn_envelope (POT Sinkhorn OT-loss, envelope gradient)
+- sinkhorn_autodiff (POT Sinkhorn OT-loss, full autodiff)
+
+Key design choices
+------------------
+- Focus on fraud-appropriate evaluation: Precision–Recall (Average Precision),
+  plus business-aligned regret/cost metrics.
+- Plot **metrics vs optimizer iterations** (not raw losses).
+- Support checkpoint saving/loading and a resume ("continue") mechanism.
+
+Resume semantics
+----------------
+If you pass ``--resume``, the script will load the latest checkpoint for each
+run directory and continue training for ``--epochs`` *additional* epochs.
+
+Example
+-------
+Train 5 epochs from scratch:
+
+    python fraud_detection.py --loss all --epochs 5 --run-id demo1
+
+Continue training for 3 more epochs:
+
+    python fraud_detection.py --loss all --epochs 3 --run-id demo1 --resume
+
+Dependencies
+------------
+    pip install torch pandas numpy matplotlib scikit-learn tqdm
+
+Optional (for Sinkhorn variants)
+--------------------------------
+    pip install POT[backend-torch]
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import RobustScaler
+from torch import Tensor
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+
+from examples.tabular_models import BackboneName, TabularModelConfig, TabularRiskModel
+from examples.utils import (
+    TrainingState,
+    ema_update,
+    get_device,
+    plot_metric_trajectory,
+    plot_precision_recall_curve,
+    setup_logging,
+    training_state_from_dict,
+    training_state_to_dict,
+)
+
+
+# =============================================================================
+# Business model → per-example regret/cost matrix
+# =============================================================================
+
+@dataclass(frozen=True)
+class BusinessParams:
+    """
+    Business parameters used to derive per-example cost matrices.
+
+    We use a regret construction consistent with an approve/decline value model:
+
+        C_legit,decline = (1 + rho_fd) * M
+        C_fraud,approve = L_fraud(M) = lambda_cb * M + F_cb
+
+    where M is TransactionAmt.
+    """
+    rho_fd: float = 0.10
+    lambda_cb: float = 1.50
+    F_cb: float = 15.0
+
+
+def build_cost_matrix(amount: np.ndarray, params: BusinessParams) -> np.ndarray:
+    """
+    Build per-example cost matrices C_i (2x2).
+
+    Mapping:
+    - label 0 = legit, label 1 = fraud
+    - action 0 = approve (predict legit), action 1 = decline (predict fraud)
+
+    C_i =
+        [[0, (1+rho_fd) * M_i],
+         [lambda_cb * M_i + F_cb, 0]]
+    """
+    M = amount.astype(np.float32)
+    c_fd = (1.0 + params.rho_fd) * M
+    c_cb = params.lambda_cb * M + params.F_cb
+
+    C = np.zeros((M.shape[0], 2, 2), dtype=np.float32)
+    C[:, 0, 1] = c_fd
+    C[:, 1, 0] = c_cb
+    return C
+
+
+def sample_weight_from_C(y: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """
+    Compute sample weights w_i = C_i[y_i, 1-y_i] for binary costs.
+    """
+    y = y.astype(np.int64)
+    wrong = 1 - y
+    return C[np.arange(y.shape[0]), y, wrong].astype(np.float32)
+
+
+# =============================================================================
+# Dataset
+# =============================================================================
+
+class FraudDataset(Dataset):
+    """
+    IEEE-CIS fraud dataset with features, labels, costs, and sample weights.
+
+    Returns per item:
+    - x : float32 features, shape (D,)
+    - y : int64 label in {0,1}
+    - C : float32 cost matrix, shape (2,2)
+    - w : float32 weight (for weighted CE), scalar (median-normalized globally)
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        params: BusinessParams,
+        *,
+        weight_norm_median: float,
+    ) -> None:
+        self.X = df[feature_cols].values.astype(np.float32)
+        self.y = df["isFraud"].values.astype(np.int64)
+        if "TransactionAmt_raw" in df.columns:
+            self.amount = df["TransactionAmt_raw"].values.astype(np.float32)
+        else:
+            self.amount = df["TransactionAmt"].values.astype(np.float32)
+
+        self.C = build_cost_matrix(self.amount, params)
+
+        w_raw = sample_weight_from_C(self.y, self.C)
+        denom = float(weight_norm_median) if float(weight_norm_median) > 0 else 1.0
+        self.w = (w_raw / denom).astype(np.float32)
+
+    def __len__(self) -> int:
+        return int(self.y.shape[0])
+
+    def __getitem__(self, idx: int):
+        return (
+            torch.from_numpy(self.X[idx]),
+            torch.tensor(self.y[idx], dtype=torch.long),
+            torch.from_numpy(self.C[idx]),
+            torch.tensor(self.w[idx], dtype=torch.float32),
+        )
+
+
+# =============================================================================
+# Metrics: PR + business regret
+# =============================================================================
+
+@torch.no_grad()
+def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, float]:
+    """
+    Compute regret metrics on a batch (for iteration-level tracking).
+
+    Returns
+    -------
+    dict
+        - train_expected_opt_regret
+        - train_realized_regret
+    """
+    prob = torch.softmax(scores, dim=1)[:, 1]  # P(fraud)
+    exp_approve = prob * C[:, 1, 0]
+    exp_decline = (1.0 - prob) * C[:, 0, 1]
+
+    action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
+    realized = C[torch.arange(C.shape[0], device=C.device), y, action]
+    exp_opt = torch.minimum(exp_approve, exp_decline)
+
+    return {
+        "train_expected_opt_regret": float(exp_opt.mean().item()),
+        "train_realized_regret": float(realized.mean().item()),
+    }
+
+
+@torch.no_grad()
+def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -> Dict[str, float]:
+    """
+    Evaluate PR and regret metrics on a labeled loader.
+    """
+    model.eval()
+
+    y_true: List[int] = []
+    p_fraud: List[float] = []
+    realized_regrets: List[float] = []
+    expected_opt_regrets: List[float] = []
+
+    for x, y, C, _w in loader:
+        x = x.to(device)
+        y = y.to(device)
+        C = C.to(device)
+
+        scores = model(x)
+        prob = torch.softmax(scores, dim=1)[:, 1]
+
+        y_true.extend(y.detach().cpu().numpy().tolist())
+        p_fraud.extend(prob.detach().cpu().numpy().tolist())
+
+        exp_approve = prob * C[:, 1, 0]
+        exp_decline = (1.0 - prob) * C[:, 0, 1]
+        action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
+
+        realized = C[torch.arange(C.shape[0], device=device), y, action]
+        exp_opt = torch.minimum(exp_approve, exp_decline)
+
+        realized_regrets.extend(realized.detach().cpu().numpy().tolist())
+        expected_opt_regrets.extend(exp_opt.detach().cpu().numpy().tolist())
+
+    y_arr = np.asarray(y_true, dtype=int)
+    p_arr = np.asarray(p_fraud, dtype=float)
+
+    pr_auc = float(average_precision_score(y_arr, p_arr))
+
+    return {
+        "pr_auc": pr_auc,
+        "realized_regret": float(np.mean(realized_regrets)) if realized_regrets else float("nan"),
+        "expected_opt_regret": float(np.mean(expected_opt_regrets)) if expected_opt_regrets else float("nan"),
+    }
+
+
+@torch.no_grad()
+def pr_curve(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Compute Precision–Recall curve and Average Precision on a loader.
+    """
+    model.eval()
+    y_true: List[int] = []
+    p_fraud: List[float] = []
+
+    for x, y, _C, _w in loader:
+        x = x.to(device)
+        scores = model(x)
+        prob = torch.softmax(scores, dim=1)[:, 1]
+        y_true.extend(y.numpy().tolist())
+        p_fraud.extend(prob.detach().cpu().numpy().tolist())
+
+    y_arr = np.asarray(y_true, dtype=int)
+    p_arr = np.asarray(p_fraud, dtype=float)
+
+    precision, recall, _thr = precision_recall_curve(y_arr, p_arr)
+    pr_auc = float(average_precision_score(y_arr, p_arr))
+    return precision, recall, pr_auc
+
+
+# =============================================================================
+# Feature engineering
+# =============================================================================
+
+def make_features(train_df: pd.DataFrame, val_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+    """
+    Build aligned one-hot encoded features for train and validation.
+    """
+    for df in (train_df, val_df):
+        df["TransactionAmt_log1p"] = np.log1p(df["TransactionAmt"].astype(float))
+
+    drop_cols = {"isFraud", "TransactionID"}
+    feature_cols = [c for c in train_df.columns if c not in drop_cols]
+
+    categorical_cols = train_df[feature_cols].select_dtypes(include=["object"]).columns
+    train_df2 = pd.get_dummies(train_df, columns=categorical_cols, dummy_na=True)
+    val_df2 = pd.get_dummies(val_df, columns=categorical_cols, dummy_na=True)
+
+    train_df2, val_df2 = train_df2.align(val_df2, join="left", axis=1, fill_value=0)
+
+    feature_cols2 = [c for c in train_df2.columns if c not in drop_cols]
+    train_df2[feature_cols2] = train_df2[feature_cols2].fillna(0.0)
+    val_df2[feature_cols2] = val_df2[feature_cols2].fillna(0.0)
+
+    return train_df2, val_df2, feature_cols2
+
+
+# =============================================================================
+# Loss construction
+# =============================================================================
+
+LossName = Literal[
+    "cross_entropy",
+    "cross_entropy_weighted",
+    "sinkhorn_fenchel_young",
+    "sinkhorn_envelope",
+    "sinkhorn_autodiff",
+]
+
+def make_cost_aware_loss(
+    loss_name: LossName,
+    *,
+    epsilon: Optional[float],
+    sinkhorn_max_iter: int,
+    cacis_solver_iter: int,
+):
+    """
+    Construct a cost-aware loss module.
+
+    Notes
+    -----
+    The cost-aware losses are expected to live in the ``cost_aware_losses`` package
+    you generated earlier (SinkhornFenchelYoungLoss, SinkhornEnvelopeLoss, SinkhornFullAutodiffLoss).
+    """
+    from cost_aware_losses import SinkhornFenchelYoungLoss, SinkhornEnvelopeLoss, SinkhornFullAutodiffLoss  # type: ignore
+
+    eps_mode = "constant" if epsilon is not None else "offdiag_mean"
+
+    if loss_name == "sinkhorn_fenchel_young":
+        return SinkhornFenchelYoungLoss(epsilon_mode=eps_mode, epsilon=epsilon, solver_iter=cacis_solver_iter)
+    if loss_name == "sinkhorn_envelope":
+        return SinkhornEnvelopeLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+    if loss_name == "sinkhorn_autodiff":
+        return SinkhornFullAutodiffLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+
+    raise ValueError(f"Not a cost-aware loss: {loss_name}")
+
+
+def weighted_cross_entropy(scores: Tensor, y: Tensor, w: Tensor) -> Tensor:
+    """
+    Sample-weighted cross entropy with normalized weights.
+
+    We use reduction='none' then aggregate with normalized weights:
+
+        loss = sum_i w_i * CE_i / sum_i w_i
+    """
+    ce_i = nn.functional.cross_entropy(scores, y, reduction="none")
+    w = torch.clamp(w, min=0.0)
+    denom = torch.clamp(w.sum(), min=1e-12)
+    return (w * ce_i).sum() / denom
+
+
+# =============================================================================
+# Checkpointing
+# =============================================================================
+
+def _best_mode_for_metric(metric: str) -> Literal["min", "max"]:
+    """
+    Decide whether to minimize or maximize a given metric.
+    """
+    if metric in ("pr_auc",):
+        return "max"
+    # regrets are minimized
+    return "min"
+
+
+def save_checkpoint(
+    path: Path,
+    *,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    state: TrainingState,
+    ema_buf: Dict[str, Optional[float]],
+    epoch_next: int,
+    model_config: Dict[str, Any],
+    run_config: Dict[str, Any],
+    best_score: Optional[float],
+) -> None:
+    """
+    Save a training checkpoint.
+
+    Parameters
+    ----------
+    path:
+        Destination file.
+    model:
+        Model to save.
+    optimizer:
+        Optimizer to save.
+    state:
+        TrainingState (metrics history).
+    ema_buf:
+        EMA buffers (last EMA values).
+    epoch_next:
+        Next epoch index to run (resume will start here).
+    model_config:
+        Model hyperparameters/config.
+    run_config:
+        Run arguments/config snapshot for reproducibility.
+    best_score:
+        Best score so far (according to save-best-by metric).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    ckpt: Dict[str, Any] = {
+        "epoch_next": int(epoch_next),
+        "state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "training_state": training_state_to_dict(state),
+        "ema_buf": {k: (None if v is None else float(v)) for k, v in ema_buf.items()},
+        "model_config": dict(model_config),
+        "run_config": dict(run_config),
+        "best_score": None if best_score is None else float(best_score),
+        "rng": {
+            "torch": torch.random.get_rng_state(),
+            "numpy": np.random.get_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        },
+    }
+    torch.save(ckpt, path)
+
+
+def load_checkpoint(path: Path, device: torch.device) -> Dict[str, Any]:
+    """
+    Load a training checkpoint.
+
+    Parameters
+    ----------
+    path:
+        Checkpoint file path.
+    device:
+        Device to map tensors to.
+
+    Returns
+    -------
+    dict
+        The loaded checkpoint dictionary.
+    """
+    return torch.load(path, map_location=device)
+
+
+# =============================================================================
+# Training
+# =============================================================================
+
+def save_state_csvs(state: TrainingState, out_dir: Path) -> None:
+    """
+    Save state metric series to CSV for downstream analysis.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if state.train_ema_iters:
+        train_df = pd.DataFrame({"iter": state.train_ema_iters})
+        for k, v in state.train_ema.items():
+            train_df[k] = v
+        train_df.to_csv(out_dir / "train_ema_metrics.csv", index=False)
+
+    if state.probe_iters:
+        probe_df = pd.DataFrame({"iter": state.probe_iters})
+        for k, v in state.probe_points.items():
+            probe_df[k] = v
+        probe_df.to_csv(out_dir / "probe_metrics.csv", index=False)
+
+
+def train_one(
+    *,
+    run_dir: Path,
+    loss_name: LossName,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    probe_loader: DataLoader,
+    device: torch.device,
+    epochs_additional: int,
+    quick: bool,
+    eval_every: int,
+    ema_alpha: float,
+    epsilon: Optional[float],
+    sinkhorn_max_iter: int,
+    cacis_solver_iter: int,
+    resume: bool,
+    save_best_by: str,
+    checkpoint_every_iters: int,
+    checkpoint_every_epochs: int,
+    run_config: Dict[str, Any],
+    model_config: Dict[str, Any],
+) -> Dict[str, float]:
+    """
+    Train one method, with optional resume from checkpoint.
+
+    Returns
+    -------
+    dict
+        Final validation metrics for summary.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_last = run_dir / "checkpoint_last.pt"
+    ckpt_best = run_dir / "checkpoint_best.pt"
+
+    # -----------------------
+    # Restore from checkpoint
+    # -----------------------
+    state = TrainingState(batch_size=int(train_loader.batch_size or 0))
+    ema_buf: Dict[str, Optional[float]] = {
+        "train_expected_opt_regret": None,
+        "train_realized_regret": None,
+    }
+    best_score: Optional[float] = None
+    epoch_start = 0
+
+    if resume and ckpt_last.exists():
+        ckpt = load_checkpoint(ckpt_last, device=device)
+        model.load_state_dict(ckpt["state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
+        state = training_state_from_dict(ckpt["training_state"])
+        ema_buf = {k: (None if v is None else float(v)) for k, v in (ckpt.get("ema_buf") or {}).items()}
+        epoch_start = int(ckpt.get("epoch_next", 0))
+        best_score = ckpt.get("best_score", None)
+
+        # Restore RNG states if present (best-effort).
+        rng = ckpt.get("rng", {})
+        try:
+            if rng.get("torch") is not None:
+                torch.random.set_rng_state(rng["torch"])
+            if rng.get("numpy") is not None:
+                np.random.set_state(rng["numpy"])
+            if torch.cuda.is_available() and rng.get("cuda") is not None:
+                torch.cuda.set_rng_state_all(rng["cuda"])
+        except Exception:
+            logging.warning("[%s] RNG state restore failed (continuing anyway).", loss_name)
+
+        logging.info("[%s] Resumed from %s at epoch=%d iter=%d", loss_name, ckpt_last, epoch_start, state.current_iter)
+    elif resume:
+        logging.warning("[%s] --resume set but no checkpoint found at %s; starting fresh.", loss_name, ckpt_last)
+
+    # -----------------------
+    # Loss construction
+    # -----------------------
+    ce_loss = nn.CrossEntropyLoss()
+    cost_aware_loss = None
+    if loss_name in ("sinkhorn_fenchel_young", "sinkhorn_envelope", "sinkhorn_autodiff"):
+        cost_aware_loss = make_cost_aware_loss(
+            loss_name,
+            epsilon=epsilon,
+            sinkhorn_max_iter=sinkhorn_max_iter,
+            cacis_solver_iter=cacis_solver_iter,
+        )
+
+    best_mode = _best_mode_for_metric(save_best_by)
+
+    def is_better(new: float, best: Optional[float]) -> bool:
+        if best is None:
+            return True
+        return (new > best) if best_mode == "max" else (new < best)
+
+    # -----------------------
+    # Training loop
+    # -----------------------
+    target_epochs = epoch_start + int(epochs_additional)
+    logging.info("[%s] Training epochs: %d -> %d (additional=%d)", loss_name, epoch_start, target_epochs, epochs_additional)
+
+    for epoch in range(epoch_start, target_epochs):
+        model.train()
+        pbar = tqdm(train_loader, desc=f"[{loss_name}] Epoch {epoch+1}/{target_epochs}", total=len(train_loader))
+
+        for step, (x, y, C, w) in enumerate(pbar):
+            if quick and step >= 5:
+                break
+
+            x = x.to(device)
+            y = y.to(device)
+            C = C.to(device)
+            w = w.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+            scores = model(x)
+
+            # Training objective
+            if loss_name == "cross_entropy":
+                loss = ce_loss(scores, y)
+            elif loss_name == "cross_entropy_weighted":
+                loss = weighted_cross_entropy(scores, y, w)
+            else:
+                assert cost_aware_loss is not None
+                loss = cost_aware_loss(scores, y, C=C)
+
+            loss.backward()
+            optimizer.step()
+
+            state.current_iter += 1
+
+            # Iteration-level metrics (EMA)
+            train_metrics = batch_regret_metrics(scores, y, C)
+            state.train_ema_iters.append(state.current_iter)
+            for k, v in train_metrics.items():
+                ema_buf[k] = ema_update(ema_buf.get(k), float(v), alpha=ema_alpha)
+                state.train_ema.setdefault(k, []).append(float(ema_buf[k]))
+
+            pbar.set_postfix({
+                "loss": f"{float(loss.item()):.4f}",
+                "regret*": f"{train_metrics['train_expected_opt_regret']:.2f}",
+            })
+
+            # Periodic probe evaluation
+            if eval_every > 0 and (state.current_iter % eval_every == 0):
+                probe_metrics = eval_on_loader(model, probe_loader, device)
+                state.probe_iters.append(state.current_iter)
+                for k, v in probe_metrics.items():
+                    state.probe_points.setdefault(k, []).append(float(v))
+                logging.info(
+                    "[%s] iter=%d | probe PR-AUC=%.4f | regret(exp*)=%.4f | regret(real)=%.4f",
+                    loss_name,
+                    state.current_iter,
+                    probe_metrics["pr_auc"],
+                    probe_metrics["expected_opt_regret"],
+                    probe_metrics["realized_regret"],
+                )
+
+            # Iteration-based checkpointing
+            if checkpoint_every_iters > 0 and (state.current_iter % checkpoint_every_iters == 0):
+                save_checkpoint(
+                    ckpt_last,
+                    model=model,
+                    optimizer=optimizer,
+                    state=state,
+                    ema_buf=ema_buf,
+                    epoch_next=epoch,  # we are still inside epoch
+                    model_config=model_config,
+                    run_config=run_config,
+                    best_score=best_score,
+                )
+
+        # Epoch boundary marker
+        state.epoch_iters.append(state.current_iter)
+
+        # Full validation at epoch end
+        val_metrics = eval_on_loader(model, val_loader, device)
+        logging.info(
+            "[%s] Epoch %02d | VAL PR-AUC=%.4f | regret(exp*)=%.4f | regret(real)=%.4f",
+            loss_name,
+            epoch + 1,
+            val_metrics["pr_auc"],
+            val_metrics["expected_opt_regret"],
+            val_metrics["realized_regret"],
+        )
+
+        # Save CSVs + plots
+        save_state_csvs(state, run_dir)
+
+        # Train EMA plots
+        if "train_expected_opt_regret" in state.train_ema:
+            plot_metric_trajectory(
+                iters=state.train_ema_iters,
+                values=state.train_ema["train_expected_opt_regret"],
+                out_path=run_dir / "train_expected_opt_regret_ema.png",
+                title=f"{loss_name} — Train expected optimal regret (EMA)",
+                ylabel="€ regret (expected, optimal action)",
+                epoch_iters=state.epoch_iters,
+            )
+        if "train_realized_regret" in state.train_ema:
+            plot_metric_trajectory(
+                iters=state.train_ema_iters,
+                values=state.train_ema["train_realized_regret"],
+                out_path=run_dir / "train_realized_regret_ema.png",
+                title=f"{loss_name} — Train realized regret (EMA)",
+                ylabel="€ regret (realized)",
+                epoch_iters=state.epoch_iters,
+            )
+
+        # Probe plots
+        if state.probe_iters:
+            if "pr_auc" in state.probe_points:
+                plot_metric_trajectory(
+                    iters=state.probe_iters,
+                    values=state.probe_points["pr_auc"],
+                    out_path=run_dir / "probe_pr_auc.png",
+                    title=f"{loss_name} — Probe PR-AUC vs iteration",
+                    ylabel="PR-AUC",
+                    epoch_iters=state.epoch_iters,
+                    y_quantile_max=None,
+                )
+            if "expected_opt_regret" in state.probe_points:
+                plot_metric_trajectory(
+                    iters=state.probe_iters,
+                    values=state.probe_points["expected_opt_regret"],
+                    out_path=run_dir / "probe_expected_opt_regret.png",
+                    title=f"{loss_name} — Probe expected optimal regret vs iteration",
+                    ylabel="€ regret (expected, optimal action)",
+                    epoch_iters=state.epoch_iters,
+                )
+            if "realized_regret" in state.probe_points:
+                plot_metric_trajectory(
+                    iters=state.probe_iters,
+                    values=state.probe_points["realized_regret"],
+                    out_path=run_dir / "probe_realized_regret.png",
+                    title=f"{loss_name} — Probe realized regret vs iteration",
+                    ylabel="€ regret (realized)",
+                    epoch_iters=state.epoch_iters,
+                )
+
+        # PR curve on full validation
+        prec, rec, pr_auc = pr_curve(model, val_loader, device)
+        plot_precision_recall_curve(
+            prec,
+            rec,
+            out_path=run_dir / "precision_recall_curve.png",
+            title=f"{loss_name} — Validation Precision–Recall",
+            average_precision=pr_auc,
+        )
+
+        # Best checkpoint update
+        score = float(val_metrics.get(save_best_by, float("nan")))
+        if not np.isnan(score) and is_better(score, best_score):
+            best_score = score
+            save_checkpoint(
+                ckpt_best,
+                model=model,
+                optimizer=optimizer,
+                state=state,
+                ema_buf=ema_buf,
+                epoch_next=epoch + 1,
+                model_config=model_config,
+                run_config=run_config,
+                best_score=best_score,
+            )
+
+        # Epoch-based checkpointing
+        if checkpoint_every_epochs > 0 and ((epoch + 1) % checkpoint_every_epochs == 0):
+            save_checkpoint(
+                ckpt_last,
+                model=model,
+                optimizer=optimizer,
+                state=state,
+                ema_buf=ema_buf,
+                epoch_next=epoch + 1,
+                model_config=model_config,
+                run_config=run_config,
+                best_score=best_score,
+            )
+
+    # Always save a final "last" checkpoint
+    save_checkpoint(
+        ckpt_last,
+        model=model,
+        optimizer=optimizer,
+        state=state,
+        ema_buf=ema_buf,
+        epoch_next=target_epochs,
+        model_config=model_config,
+        run_config=run_config,
+        best_score=best_score,
+    )
+
+    return eval_on_loader(model, val_loader, device)
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="IEEE-CIS fraud benchmark (resume + iteration plots)")
+    parser.add_argument("--run-id", type=str, default="default_run", help="Run identifier (subfolder under --out)")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint (continues for --epochs additional epochs)")
+
+    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs (additional if --resume)")
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--split", type=float, default=0.3, help="Validation split fraction")
+    parser.add_argument("--quick", action="store_true", help="Quick run (few batches)")
+
+    parser.add_argument("--out", type=str, default="fraud_output", help="Output directory")
+    parser.add_argument("--device", type=str, default="auto", help="cpu/cuda/mps/auto")
+    parser.add_argument("--seed", type=int, default=123, help="Random seed (used when starting from scratch)")
+
+    parser.add_argument(
+        "--loss",
+        type=str,
+        default="all",
+        choices=[
+            "all",
+            "cross_entropy",
+            "cross_entropy_weighted",
+            "sinkhorn_fenchel_young",
+            "sinkhorn_envelope",
+            "sinkhorn_autodiff",
+        ],
+    )
+
+    # Model selection (extensible)
+    parser.add_argument("--backbone", type=str, default="mlp", choices=["linear", "mlp"])
+    parser.add_argument("--hidden-dims", type=str, default="256,128", help="Comma-separated hidden dims (mlp)")
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--no-batchnorm", action="store_true", help="Disable batchnorm in MLP")
+
+    # Cost-aware epsilon settings
+    parser.add_argument("--epsilon", type=float, default=None, help="Constant epsilon for cost-aware losses")
+    parser.add_argument("--sinkhorn-max-iter", type=int, default=50)
+    parser.add_argument("--cacis-solver-iter", type=int, default=30)
+
+    # Iteration-based evaluation / smoothing
+    parser.add_argument("--eval-every", type=int, default=500, help="Probe eval period in iterations (0 disables)")
+    parser.add_argument("--ema-alpha", type=float, default=0.05, help="EMA alpha for train-batch metrics")
+    parser.add_argument("--probe-size", type=int, default=20000, help="Probe size (subset of validation)")
+
+    # Checkpointing
+    parser.add_argument("--checkpoint-every-iters", type=int, default=0, help="Save checkpoint every N iters (0 disables)")
+    parser.add_argument("--checkpoint-every-epochs", type=int, default=1, help="Save checkpoint every N epochs (0 disables)")
+    parser.add_argument("--save-best-by", type=str, default="expected_opt_regret", choices=["expected_opt_regret", "realized_regret", "pr_auc"])
+
+    # Business parameters
+    parser.add_argument("--rho-fd", type=float, default=0.10)
+    parser.add_argument("--lambda-cb", type=float, default=1.50)
+    parser.add_argument("--F-cb", type=float, default=15.0)
+
+    args = parser.parse_args()
+
+    setup_logging()
+    device = get_device() if args.device == "auto" else torch.device(args.device)
+    logging.info("Using device: %s", device)
+
+    # Seeds when not resuming (best-effort reproducibility).
+    if not args.resume:
+        torch.manual_seed(int(args.seed))
+        np.random.seed(int(args.seed))
+
+    out_root = Path(args.out) / str(args.run_id)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    # Dataset path
+    data_folder = "ieee-fraud-detection"
+    train_csv = os.path.join(data_folder, "train_transaction.csv")
+
+    dwnld_msg = (
+        "rm -rf ieee-fraud-detection.zip ieee-fraud-detection || true\n"
+        "mkdir ieee-fraud-detection\n"
+        "wget -c http://deraison.ai/ai/ieee-fraud-detection.zip\n"
+        "unzip ieee-fraud-detection.zip -d ieee-fraud-detection"
+    )
+    if not Path(train_csv).exists():
+        logging.error("Missing file: %s\nRun:\n%s", train_csv, dwnld_msg)
+        return
+
+    full_df = pd.read_csv(train_csv)
+    if "TransactionAmt" not in full_df.columns or "isFraud" not in full_df.columns:
+        raise ValueError("Expected IEEE-CIS columns: TransactionAmt and isFraud.")
+
+    # Split
+    train_df, val_df = train_test_split(
+        full_df,
+        test_size=float(args.split),
+        stratify=full_df["isFraud"],
+        random_state=42,
+    )
+    logging.info("Split: train=%d, val=%d", len(train_df), len(val_df))
+
+    train_df2, val_df2, feature_cols = make_features(train_df, val_df)
+
+    # De-fragment (consolidate blocks) once to avoid PerformanceWarning on inserts
+    train_df2 = train_df2.copy()
+    val_df2 = val_df2.copy()
+
+    # Save raw amount for cost calculation before scaling
+    train_df2["TransactionAmt_raw"] = train_df2["TransactionAmt"].to_numpy(copy=True)
+    val_df2["TransactionAmt_raw"] = val_df2["TransactionAmt"].to_numpy(copy=True)
+
+    # Apply RobustScaler to features
+    logging.info("Applying RobustScaler to %d features...", len(feature_cols))
+    scaler = RobustScaler()
+    train_df2[feature_cols] = scaler.fit_transform(train_df2[feature_cols])
+    val_df2[feature_cols] = scaler.transform(val_df2[feature_cols])
+
+    input_dim = len(feature_cols)
+    logging.info("Feature dimension: %d", input_dim)
+
+    params = BusinessParams(rho_fd=float(args.rho_fd), lambda_cb=float(args.lambda_cb), F_cb=float(args.F_cb))
+    logging.info("Business params: rho_fd=%.3f, lambda_cb=%.3f, F_cb=%.2f", params.rho_fd, params.lambda_cb, params.F_cb)
+
+    # Median-normalize CE weights once (robust scaling)
+    train_amount = train_df2["TransactionAmt_raw"].values.astype(np.float32)
+    train_y = train_df2["isFraud"].values.astype(np.int64)
+    train_C = build_cost_matrix(train_amount, params)
+    w_raw = sample_weight_from_C(train_y, train_C)
+    w_median = float(np.median(w_raw[w_raw > 0])) if np.any(w_raw > 0) else 1.0
+    logging.info("Weighted-CE normalization: median(w_raw)=%.6f", w_median)
+
+    train_ds = FraudDataset(train_df2, feature_cols, params, weight_norm_median=w_median)
+    val_ds = FraudDataset(val_df2, feature_cols, params, weight_norm_median=w_median)
+
+    train_loader = DataLoader(train_ds, batch_size=int(args.batch_size), shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
+
+    # Fixed probe subset for iteration plots (deterministic)
+    probe_size = int(args.probe_size)
+    rng = np.random.default_rng(123)
+    idx = rng.choice(len(val_ds), size=min(probe_size, len(val_ds)), replace=False)
+    probe_subset = torch.utils.data.Subset(val_ds, idx.tolist())
+    probe_loader = DataLoader(probe_subset, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
+    logging.info("Probe set size: %d", len(probe_subset))
+
+    # Parse hidden dims
+    hidden_dims: Tuple[int, ...]
+    if str(args.hidden_dims).strip() == "":
+        hidden_dims = ()
+    else:
+        hidden_dims = tuple(int(s) for s in str(args.hidden_dims).split(",") if s.strip() != "")
+
+    backbone: BackboneName = "mlp" if args.backbone == "mlp" else "linear"
+    model_cfg = TabularModelConfig(
+        input_dim=int(input_dim),
+        backbone=backbone,
+        hidden_dims=hidden_dims if hidden_dims else (256, 128),
+        dropout=float(args.dropout),
+        use_batchnorm=not bool(args.no_batchnorm),
+    )
+    model_config_dict = asdict(model_cfg)
+
+    # Methods
+    methods: List[LossName]
+    if args.loss == "all":
+        methods = [
+            "cross_entropy",
+            "cross_entropy_weighted",
+            "sinkhorn_fenchel_young",
+            "sinkhorn_envelope",
+            "sinkhorn_autodiff",
+        ]
+    else:
+        methods = [args.loss]  # type: ignore[assignment]
+
+    run_config: Dict[str, Any] = vars(args).copy()
+    run_config["device_resolved"] = str(device)
+    run_config["feature_dim"] = int(input_dim)
+    run_config["weight_median"] = float(w_median)
+
+    results: Dict[str, Dict[str, float]] = {}
+
+    for loss_name in methods:
+        run_dir = out_root / str(loss_name)
+        model = TabularRiskModel(model_cfg).to(device)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(args.lr),
+            weight_decay=float(getattr(args, "weight_decay", 0.01)),
+        )
+        try:
+            final_metrics = train_one(
+                run_dir=run_dir,
+                loss_name=loss_name,
+                model=model,
+                optimizer=optimizer,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                probe_loader=probe_loader,
+                device=device,
+                epochs_additional=int(args.epochs),
+                quick=bool(args.quick),
+                eval_every=int(args.eval_every),
+                ema_alpha=float(args.ema_alpha),
+                epsilon=args.epsilon,
+                sinkhorn_max_iter=int(args.sinkhorn_max_iter),
+                cacis_solver_iter=int(args.cacis_solver_iter),
+                resume=bool(args.resume),
+                save_best_by=str(args.save_best_by),
+                checkpoint_every_iters=int(args.checkpoint_every_iters),
+                checkpoint_every_epochs=int(args.checkpoint_every_epochs),
+                run_config=run_config,
+                model_config=model_config_dict,
+            )
+            results[loss_name] = final_metrics
+        except ImportError as e:
+            logging.error("[%s] Skipped (missing dependency): %s", loss_name, str(e))
+
+    if results:
+        summary = pd.DataFrame(results).T
+        summary_path = out_root / "summary.csv"
+        summary.to_csv(summary_path, index=True)
+        logging.info("Saved summary to: %s", summary_path)
+        with pd.option_context("display.max_columns", 50, "display.width", 140):
+            logging.info("Final summary:\n%s", summary)
+
+    logging.info("Done.")
+
+
+if __name__ == "__main__":
+    main()
