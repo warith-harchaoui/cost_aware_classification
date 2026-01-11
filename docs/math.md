@@ -22,12 +22,12 @@ All losses support **example-dependent costs**:
 
 Balanced entropic OT between distributions $p, q \in \Delta_K$ is often defined as:
 
-$$
+```math
 \mathrm{OT}_\varepsilon(p,q) \;=\; \min_{P \in \mathbb{R}_+^{K\times K}}
 \;\langle P, C \rangle \;+\; \varepsilon\;\mathrm{KL}(P \,\|\, p\otimes q)
 \quad\text{s.t.}\quad
 P\mathbf{1} = p,\;\; P^\top \mathbf{1} = q.
-$$
+```
 
 The entropic regularization parameter is **the scalar multiplying the KL term**.
 
@@ -36,9 +36,9 @@ The entropic regularization parameter is **the scalar multiplying the KL term**.
 
 **In this balanced KL-regularized formulation:**
 
-$$
+```math
 \boxed{\texttt{reg} = \varepsilon}
-$$
+```
 
 So an “apples-to-apples” comparison across implementations means matching this scalar.
 
@@ -48,22 +48,22 @@ So an “apples-to-apples” comparison across implementations means matching th
 
 Let the Gibbs kernel be:
 
-$$
+```math
 K \;=\; \exp(-C/\varepsilon).
-$$
+```
 
 Sinkhorn iterations solve for scaling vectors $u, v$ such that:
 
-$$
+```math
 P^\star = \mathrm{diag}(u)\,K\,\mathrm{diag}(v)
-$$
+```
 
 has marginals $p$ and $q$. The standard updates are:
 
-$$
+```math
 u \leftarrow \frac{p}{K v},\qquad
 v \leftarrow \frac{q}{K^\top u},
-$$
+```
 
 with elementwise division.
 
@@ -79,9 +79,9 @@ We build:
 
 We compute a Sinkhorn plan $P^\star(p,q)$, then evaluate the **primal objective**:
 
-$$
+```math
 L(p,q) = \langle P^\star, C \rangle + \varepsilon\,\mathrm{KL}(P^\star \,\|\, p\otimes q).
-$$
+```
 
 ### Backward (envelope / implicit-ish)
 We treat $P^\star$ as **constant** in the backward pass (no differentiation through Sinkhorn iterations),
@@ -105,9 +105,9 @@ This can be more “end-to-end”, but typically costs more memory and can be le
 
 Sinkhorn-Fenchel-Young implements a Fenchel–Young loss of the form:
 
-$$
+```math
 \ell(y,f) = \Omega^\star_{C,\varepsilon}(f) - f_y,
-$$
+```
 
 where $\Omega^\star$ is the Fenchel conjugate of a convex regularizer $\Omega$
 that encodes the cost geometry.

@@ -38,15 +38,15 @@ We will build:
 
 Given any value matrix $V\in\mathbb{R}^{K\times K}$ (here $K=2$), define for each truth state $y$:
 
-$$
+```math
 a^\*(y)\in \arg\max_{a} V_{y,a}
-$$
+```
 
 and define the regret/cost matrix:
 
-$$
+```math
 C_{y,a} = V_{y,a^\*(y)} - V_{y,a} \;\;\ge 0.
-$$
+```
 
 Key consequences:
 - $C_{y,a^\*(y)} = 0$ by construction (no regret when choosing the best action under truth $y$),
@@ -67,16 +67,16 @@ Declining incurs **friction / lost margin** (lost customer, lost sale, dissatisf
 A simple model:
 
 - Approve (good outcome):
-  $$
+  ```math
   V_{\text{legit},\,\text{approve}}(M) = M.
-  $$
+  ```
   This “$M$” can be interpreted as a *normalized* positive value proportional to amount.
   (If you prefer “profit margin”, replace $M$ by $m\cdot M$ where $m\in(0,1)$.)
 
 - Decline (bad outcome):
-  $$
+  ```math
   V_{\text{legit},\,\text{decline}}(M) = -\rho_{FD} \, M
-  $$
+  ```
   where $\rho_{FD}\ge 0$ captures the *relative friction / foregone value* from declining a legit transaction.
   This captures lost margin, customer churn, support cost, etc.
 
@@ -86,20 +86,20 @@ If the transaction is fraudulent, approving causes **fraud loss**;
 declining avoids that loss.
 
 - Decline (good outcome):
-  $$
+  ```math
   V_{\text{fraud},\,\text{decline}}(M) = 0.
-  $$
+  ```
 
 - Approve (bad outcome):
-  $$
+  ```math
   V_{\text{fraud},\,\text{approve}}(M) = -L_{\text{fraud}}(M),
-  $$
+  ```
   where $L_{\text{fraud}}(M)\ge 0$ is the expected fraud loss **if approved**.
 
 A common, reasonable instantiation is:
-$$
+```math
 L_{\text{fraud}}(M) = \lambda_{cb} M + F_{cb},
-$$
+```
 where:
 - $\lambda_{cb}\ge 1$ is a chargeback multiplier (principal + fees + operational overhead),
 - $F_{cb}\ge 0$ is a fixed dispute/chargeback fee (optional but often realistic).
@@ -110,14 +110,14 @@ where:
 
 Putting the above together:
 
-$$
+```math
 V(M) \;=\;
 \begin{array}{c|cc}
-\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ 
+\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
 \text{legit} & M & -\rho_{FD} M \\
 \text{fraud} & -L_{\text{fraud}}(M) & 0
 \end{array}
-$$
+```
 
 Interpretation:
 - For legit: approving is best (typically), declining is harmful by a factor $\rho_{FD}M$.
@@ -130,31 +130,31 @@ Interpretation:
 Apply the rule:
 
 - If truth is legit: $a^\*(\text{legit})=\text{approve}$ (since $M > -\rho_{FD}M$)
-  $$
+  ```math
   C_{\text{legit},\,\text{approve}} = M - M = 0
-  $$
-  $$
+  ```
+  ```math
   C_{\text{legit},\,\text{decline}} = M - (-\rho_{FD}M) = (1+\rho_{FD})M
-  $$
+  ```
 
 - If truth is fraud: $a^\*(\text{fraud})=\text{decline}$ (since $0 > -L_{\text{fraud}}(M)$)
-  $$
+  ```math
   C_{\text{fraud},\,\text{approve}} = 0 - (-L_{\text{fraud}}(M)) = L_{\text{fraud}}(M)
-  $$
-  $$
+  ```
+  ```math
   C_{\text{fraud},\,\text{decline}} = 0 - 0 = 0
-  $$
+  ```
 
 Therefore:
 
-$$
+```math
 C(M) \;=\;
 \begin{array}{c|cc}
-\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ 
+\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
 \text{legit} & 0 & (1+\rho_{FD})M \\
 \text{fraud} & L_{\text{fraud}}(M) & 0
 \end{array}
-$$
+```
 
 This is the matrix you should implement per transaction.
 
@@ -168,13 +168,13 @@ If you represent:
 
 then the per-example cost tensor $C_i\in\mathbb{R}^{2\times 2}$ should be:
 
-$$
+```math
 C_i =
 \begin{pmatrix}
 0 & (1+\rho_{FD})M_i\\
 L_{\text{fraud}}(M_i) & 0
 \end{pmatrix}.
-$$
+```
 
 This matches the “zero diagonal, meaningful off-diagonal regrets” principle.
 
@@ -185,24 +185,24 @@ This matches the “zero diagonal, meaningful off-diagonal regrets” principle.
 Given a model’s predicted probability $p_i = \mathbb{P}(y=1\mid x_i)$ for fraud:
 
 - Expected cost if **approve**:
-  $$
+  ```math
   \mathbb{E}[C \mid a=\text{approve}] = p_i \cdot L_{\text{fraud}}(M_i).
-  $$
+  ```
 
 - Expected cost if **decline**:
-  $$
+  ```math
   \mathbb{E}[C \mid a=\text{decline}] = (1-p_i) \cdot (1+\rho_{FD})M_i.
-  $$
+  ```
 
 So decline iff:
-$$
+```math
 (1-p_i)(1+\rho_{FD})M_i < p_i L_{\text{fraud}}(M_i).
-$$
+```
 
 If $L_{\text{fraud}}(M)=\lambda_{cb}M$ and $F_{cb}=0$, the $M$ cancels and the threshold becomes constant:
-$$
+```math
 p_i > \frac{1+\rho_{FD}}{(1+\rho_{FD})+\lambda_{cb}}.
-$$
+```
 
 If you include a fixed fee $F_{cb}>0$, the threshold becomes **amount-dependent** (more realistic).
 
@@ -234,9 +234,9 @@ These values are intended to be:
   Interpretation: fixed dispute/chargeback fee (helps make the decision threshold amount-dependent).
 
 So:
-$$
+```math
 L_{\text{fraud}}(M)=1.5M + 15.
-$$
+```
 
 These are a good starting point; you can sweep $\rho_{FD}\in\{0.05,0.10,0.20\}$ and
 $\lambda_{cb}\in\{1.0,1.5,2.0,3.0\}$, $F_{cb}\in\{0,10,25\}$.
@@ -248,9 +248,9 @@ In the strict approve/decline model above, a constant review cost is not directl
 decline as “send to review”.
 
 If you want “decline = review”, replace the legit-decline regret by a constant:
-$$
+```math
 C_{\text{legit},\,\text{decline}} = c_{FP}.
-$$
+```
 But note this deviates from the value-matrix derivation and removes amount dependence on the false-decline side.
 
 For apples-to-apples comparisons with the regret geometry, prefer the $(1+\rho_{FD})M$ form.
@@ -282,12 +282,12 @@ For each transaction $i$ with amount $M_i$:
    - $c_{FD,i} = (1+\rho_{FD})M_i$
    - $c_{CB,i} = L_{\text{fraud}}(M_i)=\lambda_{cb}M_i + F_{cb}$
 3. Build:
-$$
+```math
 C_i =
 \begin{pmatrix}
 0 & c_{FD,i}\\
 c_{CB,i} & 0
 \end{pmatrix}.
-$$
+```
 
 That is the **instance-dependent cost matrix** consistent with the geometry-of-regret construction.
