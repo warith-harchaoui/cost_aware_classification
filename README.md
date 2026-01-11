@@ -33,6 +33,7 @@ conda install -y pip
 pip install -r requirements.txt
 ```
 
+
 ## IEEE-CIS fraud experiment
 
 ### Download the dataset
@@ -44,17 +45,20 @@ wget -c http://deraison.ai/ai/ieee-fraud-detection.zip
 unzip ieee-fraud-detection.zip -d ieee-fraud-detection
 ```
 
+
 ### Run one method
 
 ```bash
 python -m examples.fraud_detection --loss cross_entropy --epochs 5 --run-id demo1
 ```
 
+
 ### Run all methods
 
 ```bash
 python -m examples.fraud_detection --loss all --epochs 5 --run-id demo1
 ```
+
 
 ### Resume training (“continue”)
 
@@ -63,6 +67,7 @@ This continues for **additional epochs**:
 ```bash
 python -m examples.fraud_detection --loss all --epochs 3 --run-id demo1 --resume
 ```
+
 
 Artifacts are written under:
 
@@ -75,6 +80,7 @@ fraud_output/<run-id>/<loss_name>/
   precision_recall_curve.png
   ...
 ```
+
 
 ## Documentation
 
