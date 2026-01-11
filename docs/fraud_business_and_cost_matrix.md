@@ -113,7 +113,7 @@ Putting the above together:
 $$
 V(M) \;=\;
 \begin{array}{c|cc}
-\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
+\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ 
 \text{legit} & M & -\rho_{FD} M \\
 \text{fraud} & -L_{\text{fraud}}(M) & 0
 \end{array}
@@ -150,7 +150,7 @@ Therefore:
 $$
 C(M) \;=\;
 \begin{array}{c|cc}
-\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
+\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ 
 \text{legit} & 0 & (1+\rho_{FD})M \\
 \text{fraud} & L_{\text{fraud}}(M) & 0
 \end{array}
