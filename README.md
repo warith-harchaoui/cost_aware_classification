@@ -5,7 +5,7 @@ Corporate research/engineering repo for **cost-aware classification** with **exa
 Included losses
 - **Cross-Entropy baselines** (in the example runner)
   - `cross_entropy`
-  - `cross_entropy_weighted` with sample weights \(w_i = C_i[y_i, 1-y_i]\)
+  - `cross_entropy_weighted` with sample weights $w_i = C_i[y_i, 1-y_i]$
 - **SinkhornFenchelYoungLoss**: implicit Fenchel–Young loss with a Frank–Wolfe inner solver
 - **SinkhornEnvelopeLoss**: entropic OT-loss with envelope (implicit-ish) gradients
 - **SinkhornFullAutodiffLoss**: entropic OT-loss with full autodiff through Sinkhorn
@@ -78,7 +78,7 @@ fraud_output/<run-id>/<loss_name>/
 
 ## Documentation
 
-- `docs/math.md` — derivations + the explicit mapping between \(\varepsilon\) and POT’s `reg`
+- `docs/math.md` — derivations + the explicit mapping between $\varepsilon$ and POT’s `reg`
 - `docs/fraud_business_and_cost_matrix.md` — business value model and the per-example cost matrix construction
 
 ## 📜 License
