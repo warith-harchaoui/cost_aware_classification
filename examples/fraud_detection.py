@@ -946,8 +946,8 @@ def main() -> None:
         model = TabularRiskModel(model_cfg).to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=float(args.lr),
-            weight_decay=float(getattr(args, "weight_decay", 0.01)),
+            # lr=float(args.lr),
+            # weight_decay=float(getattr(args, "weight_decay", 0.01)),
         )
         try:
             final_metrics = train_one(
