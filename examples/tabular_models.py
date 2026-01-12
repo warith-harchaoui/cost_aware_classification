@@ -62,8 +62,8 @@ class TabularModelConfig:
     input_dim: int
     backbone: BackboneName = "mlp"
     hidden_dims: Tuple[int, ...] = (256, 128)
-    dropout: float = 0.1
-    use_batchnorm: bool = True
+    dropout: float = 0.0
+    use_batchnorm: bool = False
     K: int = 2
 
 

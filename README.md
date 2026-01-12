@@ -60,7 +60,7 @@ python -m examples.fraud_detection --loss all --epochs 5 --run-id demo1
 ```
 
 
-### Resume training 
+### Resume training (“continue”)
 
 This continues for **additional epochs**:
 
