@@ -4,7 +4,7 @@ This repository implements three cost-aware losses for multi-class classificatio
 
 - **SinkhornFenchelYoungLoss** (implicit Fenchel–Young / Frank–Wolfe inner solve)
 - **SinkhornEnvelopeLoss** (entropic OT + envelope gradient)
-- **SinkhornFullAutodiffLoss** (entropic OT + full autodiff through Sinkhorn)
+- **SinkhornFullAutodiffLoss** (entropic OT + full autodiff through Sinkhorn iterations)
 
 The common ingredients are:
 
