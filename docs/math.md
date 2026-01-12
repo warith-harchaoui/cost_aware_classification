@@ -10,7 +10,7 @@ The common ingredients are:
 
 - A **score vector** (logits) $f \in \mathbb{R}^K$
 - A true label $y \in \{0,\dots,K-1\}$
-- A **cost matrix** $C \in \mathbb{R}_+^{K\times K}$ where $C_{i,j}$ is the business cost of *acting as class $j$* when the true class is $i$.
+- A **cost matrix** $C \in \mathbb{R}_+^{K\times K}$ where $C_{i,j}$ is the business cost of *acting as class* $j$ when the true class is $i$.
   - We assume $C_{i,i}=0$ and $C_{i,j}\ge 0$.
 
 All losses support **example-dependent costs**:
