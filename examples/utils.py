@@ -199,27 +199,18 @@ def plot_metric_trajectory(
     ylabel: str,
     epoch_iters: Optional[Sequence[int]] = None,
     y_quantile_max: Optional[float] = 0.98,
+    baseline_values: Optional[Sequence[float]] = None,
+    baseline_label: str = "Baseline",
 ) -> None:
     """
     Plot a single metric vs training iterations.
-
+    
     Parameters
     ----------
-    iters:
-        Iteration indices.
-    values:
-        Metric values (same length as iters).
-    out_path:
-        PNG file path to save.
-    title:
-        Plot title.
-    ylabel:
-        Y-axis label.
-    epoch_iters:
-        Optional epoch boundary iteration indices; drawn as light vertical lines.
-    y_quantile_max:
-        If provided, sets the upper y-limit to this quantile to improve readability.
-        Use None to avoid cropping (e.g., AP in [0,1]).
+    baseline_values:
+        Optional baseline metric values (same length as iters).
+    baseline_label:
+        Label for the baseline curve.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,23 +219,35 @@ def plot_metric_trajectory(
     val = np.asarray(list(values), dtype=float)
 
     plt.figure(figsize=(12, 4.5))
-    plt.plot(it, val, linewidth=2)
+    plt.plot(it, val, linewidth=2, label="Model")
+
+    if baseline_values is not None:
+        base_val = np.asarray(list(baseline_values), dtype=float)
+        # Handle length mismatch if any
+        min_len = min(len(it), len(base_val))
+        plt.plot(it[:min_len], base_val[:min_len], 
+                 linestyle="--", color="gray", alpha=0.7, label=baseline_label)
 
     if epoch_iters:
         first = True
         for e in epoch_iters:
             plt.axvline(e, linestyle=":", alpha=0.25, label="Epoch" if first else None)
             first = False
-        if len(epoch_iters) > 1:
-            plt.legend(loc="best")
 
+    plt.legend(loc="best")
     plt.xlabel("Optimizer iterations")
     plt.ylabel(ylabel)
     plt.title(title)
 
     if y_quantile_max is not None and val.size > 0:
         top = float(np.quantile(val, float(y_quantile_max)))
+        if baseline_values is not None and len(baseline_values) > 0:
+            top = max(top, float(np.quantile(baseline_values, float(y_quantile_max))))
+            
         bottom = float(np.min(val))
+        if baseline_values is not None and len(baseline_values) > 0:
+             bottom = min(bottom, float(np.min(baseline_values)))
+             
         pad = 0.1 * (top - bottom + 1e-12)
         plt.ylim(bottom - pad, top + pad)
 

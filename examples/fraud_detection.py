@@ -57,6 +57,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from sklearn.metrics import average_precision_score, precision_recall_curve
@@ -216,9 +217,38 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
     action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
     realized = C[torch.arange(C.shape[0], device=C.device), y, action]
 
+    # Naive baselines (Always Approve vs Always Decline)
+    # 1. Naive Expected
+    mean_exp_approve = exp_approve.mean().item()
+    mean_exp_decline = exp_decline.mean().item()
+    naive_exp_cost = min(mean_exp_approve, mean_exp_decline)
+    
+    # 2. Naive Realized
+    # Cost if we always approved: C[i, y[i], 0]
+    # Cost if we always declined: C[i, y[i], 1]
+    cost_approve_all = C[torch.arange(C.shape[0], device=C.device), y, 0]
+    cost_decline_all = C[torch.arange(C.shape[0], device=C.device), y, 1]
+    naive_realized_cost = min(cost_approve_all.mean().item(), cost_decline_all.mean().item())
+    
+    # Optimal Expected Cost
+    mean_exp_opt = exp_opt.mean().item()
+    
+    # Optimal Realized Cost = min(C[i, y, 0], C[i, y, 1])
+    # Note: 'train_realized_regret' assumes we want regret vs perfect foresight?
+    # Usually realized regret = realized_cost - optimal_realized_cost
+    # But optimal_realized_cost is usually 0 if C has 0s on diagonal?
+    # Let's check cost matrix structure.
+    # C_i = [[0, ...], [..., 0]]. So optimal cost is 0.
+    # If standard costs are [[0, FP], [FN, 0]], then optimal decision always yields 0 cost.
+    # So regret = cost.
+    # But let's be safe and subtract min entry.
+    opt_realized = torch.minimum(cost_approve_all, cost_decline_all).mean().item()
+
     return {
-        "train_expected_opt_regret": float(exp_opt.mean().item()),
+        "train_expected_opt_regret": mean_exp_opt,
         "train_realized_regret": float(realized.mean().item()),
+        "train_naive_expected_regret": naive_exp_cost - mean_exp_opt,
+        "train_naive_realized_regret": naive_realized_cost - opt_realized,
     }
 
 
@@ -654,6 +684,15 @@ def train_one(
     target_epochs = epoch_start + int(epochs_additional)
     logging.info("[%s] Training epochs: %d -> %d (additional=%d)", loss_name, epoch_start, target_epochs, epochs_additional)
 
+    # Scheduler: Cosine Annealing
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=target_epochs, eta_min=1e-6
+    )
+    # Fast-forward scheduler if resuming
+    if epoch_start > 0:
+         for _ in range(epoch_start):
+             scheduler.step()
+
     for epoch in range(epoch_start, target_epochs):
         # Update epsilon schedule if using cost-aware loss
         if cost_aware_loss is not None:
@@ -745,6 +784,10 @@ def train_one(
 
         # Save CSVs + plots
         save_state_csvs(state, run_dir)
+        
+        # Scheduler Step
+        scheduler.step()
+        logging.info("[%s] LR: %.2e", loss_name, scheduler.get_last_lr()[0])
 
         # Train EMA plots
         if "train_expected_opt_regret" in state.train_ema:
@@ -755,6 +798,8 @@ def train_one(
                 title=f"{loss_name} — Train expected optimal regret (EMA)",
                 ylabel="€ regret (expected, optimal action)",
                 epoch_iters=state.epoch_iters,
+                baseline_values=state.train_ema.get("train_naive_expected_regret"),
+                baseline_label="Naive",
             )
         if "train_realized_regret" in state.train_ema:
             plot_metric_trajectory(
@@ -764,6 +809,8 @@ def train_one(
                 title=f"{loss_name} — Train realized regret (EMA)",
                 ylabel="€ regret (realized)",
                 epoch_iters=state.epoch_iters,
+                baseline_values=state.train_ema.get("train_naive_realized_regret"),
+                baseline_label="Naive",
             )
 
         # Probe plots
@@ -799,13 +846,29 @@ def train_one(
 
         # PR curve on full validation
         prec, rec, pr_auc = pr_curve(model, val_loader, device)
-        plot_precision_recall_curve(
-            prec,
-            rec,
-            out_path=run_dir / "precision_recall_curve.png",
-            title=f"{loss_name} — Validation Precision–Recall",
-            average_precision=pr_auc,
-        )
+        # Plot
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.plot(rec, prec, marker=".", label=f"AP={pr_auc:.4f}")
+        
+        # Luck baseline (no-skill) = prevalence = sum(y)/len(y)
+        # To get y_true, we need to iterate through the val_loader
+        y_true_list = []
+        for _, y, _, _ in val_loader:
+            y_true_list.append(y)
+        y_true = torch.cat(y_true_list).cpu().numpy()
+        prevalence = y_true.sum() / len(y_true)
+        ax.axhline(prevalence, color="gray", linestyle="--", label=f"Luck ({prevalence:.4f})")
+        
+        ax.set_title(f"{loss_name} — Validation Precision–Recall (Epoch {epoch+1})")
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        ax.legend()
+        ax.grid(True)
+        fig.tight_layout()
+        try:
+            fig.savefig(run_dir / "precision_recall_curve.png")
+        finally:
+            plt.close(fig)
 
         # Best checkpoint update
         score = float(val_metrics.get(save_best_by, float("nan")))
@@ -866,8 +929,8 @@ def main() -> None:
                        help="Number of training epochs (additional epochs if --resume is used)")
     parser.add_argument("--batch-size", type=int, default=256,
                        help="Training and validation batch size (default: 256). Lower values (128-256) recommended for cost-aware losses for better speed.")
-    parser.add_argument("--lr", type=float, default=1e-4,
-                       help="Learning rate for AdamW optimizer (default: 1e-4)")
+    parser.add_argument("--lr", type=float, default=1e-5,
+                       help="Learning rate for AdamW optimizer (default: 1e-5)")
     parser.add_argument("--split", type=float, default=0.3,
                        help="Validation set fraction (default: 0.3 = 30%% validation, 70%% training)")
     parser.add_argument("--quick", action="store_true",
@@ -985,7 +1048,8 @@ def main() -> None:
         logging.error("Missing file: %s\nRun:\n%s", train_csv, dwnld_msg)
         return
 
-    full_df = pd.read_csv(train_csv)
+    logging.info("Loading train transactions from %s ...", train_csv)
+    full_df = pd.read_csv(train_csv, engine="python")
     if "TransactionAmt" not in full_df.columns or "isFraud" not in full_df.columns:
         raise ValueError("Expected IEEE-CIS columns: TransactionAmt and isFraud.")
 
@@ -1105,8 +1169,8 @@ def main() -> None:
         model = TabularRiskModel(model_cfg).to(device)
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            # lr=float(args.lr),
-            # weight_decay=float(getattr(args, "weight_decay", 0.01)),
+            lr=float(args.lr),
+            weight_decay=float(getattr(args, "weight_decay", 0.01)),
         )
         try:
             final_metrics = train_one(
