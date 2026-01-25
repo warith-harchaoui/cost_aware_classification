@@ -171,12 +171,20 @@ class SinkhornFullAutodiffLoss(CostAwareLoss):
         epsilon_min: float = 1e-8,
         max_iter: int = 50,
         label_smoothing: float = 1e-3,
+        epsilon_schedule: Optional[str] = None,
+        schedule_start_mult: float = 10.0,
+        schedule_end_mult: float = 0.1,
+        total_epochs: Optional[int] = None,
     ) -> None:
         super().__init__(
             epsilon_mode=epsilon_mode,  # type: ignore[arg-type]
             epsilon=epsilon,
             epsilon_scale=epsilon_scale,
             epsilon_min=epsilon_min,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
         )
         self.max_iter = int(max_iter)
         self.label_smoothing = float(label_smoothing)

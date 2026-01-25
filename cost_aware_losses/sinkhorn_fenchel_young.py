@@ -110,12 +110,20 @@ class SinkhornFenchelYoungLoss(CostAwareLoss):
         epsilon_scale: float = 2.0,
         epsilon_min: float = 1e-8,
         solver_iter: int = 50,
+        epsilon_schedule: Optional[str] = None,
+        schedule_start_mult: float = 10.0,
+        schedule_end_mult: float = 0.1,
+        total_epochs: Optional[int] = None,
     ) -> None:
         super().__init__(
             epsilon_mode=epsilon_mode,  # type: ignore[arg-type]
             epsilon=epsilon,
             epsilon_scale=epsilon_scale,
             epsilon_min=epsilon_min,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
         )
         self.solver_iter = int(solver_iter)
 

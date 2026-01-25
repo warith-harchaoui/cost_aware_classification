@@ -66,7 +66,12 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from examples.tabular_models import BackboneName, TabularModelConfig, TabularRiskModel
+from examples.tabular_models import (
+    BackboneName,
+    TabularModelConfig,
+    TabularRiskModel,
+    compute_smart_architecture_defaults,
+)
 from examples.utils import (
     TrainingState,
     ema_update,
@@ -320,9 +325,15 @@ LossName = Literal[
 def make_cost_aware_loss(
     loss_name: LossName,
     *,
+    epsilon_mode: str,
+    epsilon_scale: float,
     epsilon: Optional[float],
     sinkhorn_max_iter: int,
     cacis_solver_iter: int,
+    epsilon_schedule: Optional[str],
+    schedule_start_mult: float,
+    schedule_end_mult: float,
+    total_epochs: int,
 ):
     """
     Construct a cost-aware loss module.
@@ -339,16 +350,57 @@ def make_cost_aware_loss(
         SinkhornPOTLoss,
     )
 
-    eps_mode = "constant" if epsilon is not None else "offdiag_mean"
+    # Use provided epsilon_mode and epsilon_scale
+    # If epsilon is provided (constant), override mode to "constant"
+    if epsilon is not None:
+        eps_mode = "constant"
+    else:
+        eps_mode = epsilon_mode
 
     if loss_name == "sinkhorn_fenchel_young":
-        return SinkhornFenchelYoungLoss(epsilon_mode=eps_mode, epsilon=epsilon, solver_iter=cacis_solver_iter)
+        return SinkhornFenchelYoungLoss(
+            epsilon_mode=eps_mode,  # type: ignore[arg-type]
+            epsilon=epsilon,
+            epsilon_scale=epsilon_scale,
+            solver_iter=cacis_solver_iter,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
+        )
     if loss_name == "sinkhorn_envelope":
-        return SinkhornEnvelopeLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+        return SinkhornEnvelopeLoss(
+            epsilon_mode=eps_mode,  # type: ignore[arg-type]
+            epsilon=epsilon,
+            epsilon_scale=epsilon_scale,
+            max_iter=sinkhorn_max_iter,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
+        )
     if loss_name == "sinkhorn_autodiff":
-        return SinkhornFullAutodiffLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+        return SinkhornFullAutodiffLoss(
+            epsilon_mode=eps_mode,  # type: ignore[arg-type]
+            epsilon=epsilon,
+            epsilon_scale=epsilon_scale,
+            max_iter=sinkhorn_max_iter,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
+        )
     if loss_name == "sinkhorn_pot":
-        return SinkhornPOTLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+        return SinkhornPOTLoss(
+            epsilon_mode=eps_mode,  # type: ignore[arg-type]
+            epsilon=epsilon,
+            epsilon_scale=epsilon_scale,
+            max_iter=sinkhorn_max_iter,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=total_epochs,
+        )
 
     raise ValueError(f"Not a cost-aware loss: {loss_name}")
 
@@ -493,9 +545,14 @@ def train_one(
     quick: bool,
     eval_every: int,
     ema_alpha: float,
+    epsilon_mode: str,
+    epsilon_scale: float,
     epsilon: Optional[float],
     sinkhorn_max_iter: int,
     cacis_solver_iter: int,
+    epsilon_schedule: Optional[str],
+    schedule_start_mult: float,
+    schedule_end_mult: float,
     resume: bool,
     save_best_by: str,
     checkpoint_every_iters: int,
@@ -560,9 +617,15 @@ def train_one(
     if loss_name in ("sinkhorn_fenchel_young", "sinkhorn_envelope", "sinkhorn_autodiff", "sinkhorn_pot"):
         cost_aware_loss = make_cost_aware_loss(
             loss_name,
+            epsilon_mode=epsilon_mode,
+            epsilon_scale=epsilon_scale,
             epsilon=epsilon,
             sinkhorn_max_iter=sinkhorn_max_iter,
             cacis_solver_iter=cacis_solver_iter,
+            epsilon_schedule=epsilon_schedule,
+            schedule_start_mult=schedule_start_mult,
+            schedule_end_mult=schedule_end_mult,
+            total_epochs=epochs_additional,
         )
 
     best_mode = _best_mode_for_metric(save_best_by)
@@ -579,6 +642,10 @@ def train_one(
     logging.info("[%s] Training epochs: %d -> %d (additional=%d)", loss_name, epoch_start, target_epochs, epochs_additional)
 
     for epoch in range(epoch_start, target_epochs):
+        # Update epsilon schedule if using cost-aware loss
+        if cost_aware_loss is not None:
+            cost_aware_loss.set_epoch(epoch - epoch_start)
+        
         model.train()
         pbar = tqdm(train_loader, desc=f"[{loss_name}] Epoch {epoch+1}/{target_epochs}", total=len(train_loader))
 
@@ -782,15 +849,22 @@ def main() -> None:
     parser.add_argument("--run-id", type=str, default="default_run", help="Run identifier (subfolder under --out)")
     parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint (continues for --epochs additional epochs)")
 
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs (additional if --resume)")
-    parser.add_argument("--batch-size", type=int, default=512)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--split", type=float, default=0.3, help="Validation split fraction")
-    parser.add_argument("--quick", action="store_true", help="Quick run (few batches)")
-
-    parser.add_argument("--out", type=str, default="fraud_output", help="Output directory")
-    parser.add_argument("--device", type=str, default="auto", help="cpu/cuda/mps/auto")
-    parser.add_argument("--seed", type=int, default=123, help="Random seed (used when starting from scratch)")
+    parser.add_argument("--epochs", type=int, default=10,
+                       help="Number of training epochs (additional epochs if --resume is used)")
+    parser.add_argument("--batch-size", type=int, default=512,
+                       help="Training and validation batch size (default: 512)")
+    parser.add_argument("--lr", type=float, default=1e-4,
+                       help="Learning rate for AdamW optimizer (default: 1e-4)")
+    parser.add_argument("--split", type=float, default=0.3,
+                       help="Validation set fraction (default: 0.3 = 30%% validation, 70%% training)")
+    parser.add_argument("--quick", action="store_true",
+                       help="Quick test mode: use only a few batches per epoch for rapid debugging")
+    parser.add_argument("--out", type=str, default="fraud_output",
+                       help="Output root directory for all runs (default: fraud_output)")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"],
+                       help="Device to use for training: auto (detect), cpu, cuda (NVIDIA GPU), or mps (Apple Silicon)")
+    parser.add_argument("--seed", type=int, default=42,
+                       help="Random seed for reproducibility (default: 42)")
 
     parser.add_argument(
         "--loss",
@@ -807,16 +881,37 @@ def main() -> None:
         ],
     )
 
-    # Model selection (extensible)
-    parser.add_argument("--backbone", type=str, default="mlp", choices=["linear", "mlp"])
-    parser.add_argument("--hidden-dims", type=str, default="256,128", help="Comma-separated hidden dims (mlp)")
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--no-batchnorm", action="store_true", help="Disable batchnorm in MLP")
+    # Model architecture
+    parser.add_argument("--backbone", type=str, default="mlp", choices=["linear", "mlp"],
+                       help="Model architecture: 'linear' (logistic regression) or 'mlp' (multi-layer perceptron)")
+    parser.add_argument("--hidden-dims", type=str, default="", 
+                       help="Comma-separated hidden layer dimensions for MLP (e.g., '512,256,128'). Empty string uses smart defaults based on input dimension and dataset size.")
+    parser.add_argument("--dropout", type=float, default=0.1,
+                       help="Dropout rate between hidden layers (default: 0.1, auto-tuned if using smart defaults)")
+    parser.add_argument("--no-batchnorm", action="store_true", 
+                       help="Disable batch normalization in MLP (default: enabled)")
 
     # Cost-aware epsilon settings
-    parser.add_argument("--epsilon", type=float, default=None, help="Constant epsilon for cost-aware losses")
-    parser.add_argument("--sinkhorn-max-iter", type=int, default=50)
-    parser.add_argument("--cacis-solver-iter", type=int, default=30)
+    parser.add_argument("--epsilon-mode", type=str, default="offdiag_mean",
+                       choices=["offdiag_mean", "offdiag_median", "offdiag_max", "constant"],
+                       help="Epsilon computation mode (default: offdiag_mean)")
+    parser.add_argument("--epsilon-scale", type=float, default=1.0,
+                       help="Multiplicative scale factor for adaptive epsilon (default: 1.0)")
+    parser.add_argument("--epsilon", type=float, default=None, 
+                       help="Fixed epsilon value for cost-aware losses (overrides --epsilon-mode). Not recommended; use adaptive modes instead.")
+    parser.add_argument("--sinkhorn-max-iter", type=int, default=50,
+                       help="Maximum Sinkhorn iterations for OT-based losses (default: 50)")
+    parser.add_argument("--cacis-solver-iter", type=int, default=30,
+                       help="Frank-Wolfe solver iterations for Fenchel-Young loss (default: 30)")
+    
+    # Epsilon scheduling
+    parser.add_argument("--epsilon-schedule", type=str, default=None, 
+                       choices=[None, "exponential_decay"],
+                       help="Epsilon scheduling strategy (default: None = static)")
+    parser.add_argument("--epsilon-schedule-start-mult", type=float, default=10.0,
+                       help="Starting multiplier for epsilon schedule (default: 10.0)")
+    parser.add_argument("--epsilon-schedule-end-mult", type=float, default=0.1,
+                       help="Ending multiplier for epsilon schedule (default: 0.1)")
 
     # Iteration-based evaluation / smoothing
     parser.add_argument("--eval-every", type=int, default=500, help="Probe eval period in iterations (0 disables)")
@@ -826,12 +921,17 @@ def main() -> None:
     # Checkpointing
     parser.add_argument("--checkpoint-every-iters", type=int, default=0, help="Save checkpoint every N iters (0 disables)")
     parser.add_argument("--checkpoint-every-epochs", type=int, default=1, help="Save checkpoint every N epochs (0 disables)")
-    parser.add_argument("--save-best-by", type=str, default="expected_opt_regret", choices=["expected_opt_regret", "realized_regret", "pr_auc"])
+    parser.add_argument("--save-best-by", type=str, default="expected_opt_regret", 
+                       choices=["expected_opt_regret", "realized_regret", "pr_auc"],
+                       help="Metric for selecting best checkpoint: 'expected_opt_regret' (cost under optimal decisions), 'realized_regret' (actual cost), or 'pr_auc' (precision-recall AUC for imbalanced data)")
 
-    # Business parameters
-    parser.add_argument("--rho-fd", type=float, default=0.10)
-    parser.add_argument("--lambda-cb", type=float, default=1.50)
-    parser.add_argument("--F-cb", type=float, default=15.0)
+    # Business cost parameters (see docs/fraud_business_and_cost_matrix.md)
+    parser.add_argument("--rho-fd", type=float, default=0.10,
+                       help="False decline friction parameter: relative cost of declining a legitimate transaction (default: 0.10 = 10%% additional loss beyond the sale). Total cost = (1+rho_fd)*amount.")
+    parser.add_argument("--lambda-cb", type=float, default=1.50,
+                       help="Chargeback multiplier: fraud loss factor (default: 1.50 = 1.5× transaction amount). Accounts for principal + fees + operational overhead.")
+    parser.add_argument("--F-cb", type=float, default=15.0,
+                       help="Fixed chargeback fee per fraud (default: 15.0 currency units). Makes decision threshold amount-dependent. Total fraud cost = lambda_cb*amount + F_cb.")
 
     args = parser.parse_args()
 
@@ -925,12 +1025,32 @@ def main() -> None:
     else:
         hidden_dims = tuple(int(s) for s in str(args.hidden_dims).split(",") if s.strip() != "")
 
+    # Apply smart defaults (function is imported from tabular_models)
+    if not hidden_dims:
+        smart_hidden_dims, smart_dropout = compute_smart_architecture_defaults(
+            input_dim=int(input_dim),
+            n_train=len(train_ds),
+            n_classes=2,
+        )
+    else:
+        smart_hidden_dims = hidden_dims
+        smart_dropout = float(args.dropout)
+    
+    # Use user-provided dropout if specified, otherwise use smart default
+    if args.dropout != 0.1:  # 0.1 is argparse default
+        final_dropout = float(args.dropout)
+    else:
+        final_dropout = smart_dropout
+    
+    logging.info("Architecture: input_dim=%d, hidden_dims=%s, dropout=%.2f", 
+                 input_dim, smart_hidden_dims, final_dropout)
+
     backbone: BackboneName = "mlp" if args.backbone == "mlp" else "linear"
     model_cfg = TabularModelConfig(
         input_dim=int(input_dim),
         backbone=backbone,
-        hidden_dims=hidden_dims if hidden_dims else (256, 128),
-        dropout=float(args.dropout),
+        hidden_dims=smart_hidden_dims,
+        dropout=final_dropout,
         use_batchnorm=not bool(args.no_batchnorm),
     )
     model_config_dict = asdict(model_cfg)
@@ -978,9 +1098,14 @@ def main() -> None:
                 quick=bool(args.quick),
                 eval_every=int(args.eval_every),
                 ema_alpha=float(args.ema_alpha),
+                epsilon_mode=str(args.epsilon_mode),
+                epsilon_scale=float(args.epsilon_scale),
                 epsilon=args.epsilon,
                 sinkhorn_max_iter=int(args.sinkhorn_max_iter),
                 cacis_solver_iter=int(args.cacis_solver_iter),
+                epsilon_schedule=args.epsilon_schedule,
+                schedule_start_mult=float(args.epsilon_schedule_start_mult),
+                schedule_end_mult=float(args.epsilon_schedule_end_mult),
                 resume=bool(args.resume),
                 save_best_by=str(args.save_best_by),
                 checkpoint_every_iters=int(args.checkpoint_every_iters),

@@ -132,3 +132,108 @@ class TabularRiskModel(nn.Module):
             Logits of shape (B, 2).
         """
         return self.net(x)
+
+def round_nearest_upper_power_of_2(x: int) -> int:
+    """
+    Round an integer to the nearest upper power of 2.
+    
+    Parameters
+    ----------
+    x : int
+        The integer to round
+        
+    Returns
+    -------
+    int
+        The nearest upper power of 2
+    """
+    return 2 ** (x - 1).bit_length()
+
+def compute_smart_architecture_defaults(
+    input_dim: int,
+    n_train: int,
+    n_classes: int = 2,
+) -> Tuple[Tuple[int, ...], float]:
+    """
+    Compute smart architecture defaults using classic ML heuristics.
+    
+    Parameters
+    ----------
+    input_dim : int
+        Number of input features
+    n_train : int
+        Number of training samples
+    n_classes : int
+        Number of output classes (default: 2 for binary)
+        
+    Returns
+    -------
+    hidden_dims : Tuple[int, ...]
+        Recommended hidden layer dimensions
+    dropout : float
+        Recommended dropout rate
+        
+    Heuristics
+    ----------
+    - First layer: ~2/3 of input_dim (captures main patterns)
+    - Second layer: ~1/3 of input_dim (compression toward output)
+    - Third layer: bridge layer if needed (optional)
+    - Pyramid structure: gradually decrease toward n_classes
+    - Capacity constraint: total params should be < n_train to avoid overfitting
+    - Dropout: higher for smaller datasets, 0.2-0.5 typical range
+    
+    Examples
+    --------
+    >>> hidden_dims, dropout = compute_smart_architecture_defaults(544, 413378)
+    >>> hidden_dims
+    (384, 192)
+    >>> dropout
+    0.1
+    """
+    # Classic pyramid heuristic: start at ~2/3 input, compress to output
+    layer1 = max(int(2*input_dim * 0.67), n_classes * 2)  # At least 2x output
+    layer2 = max(int(2*input_dim * 0.33), n_classes * 2)  # At least 2x output
+    
+    # # Round to nice numbers (multiples of 32 or 64 for GPU efficiency)
+    # def round_to_nice(x: int) -> int:
+    #     if x >= 256:
+    #         return ((x + 31) // 32) * 32  # Round to nearest 32
+    #     elif x >= 64:
+    #         return ((x + 15) // 16) * 16  # Round to nearest 16
+    #     else:
+    #         return ((x + 7) // 8) * 8  # Round to nearest 8
+
+    
+    layer1 = round_nearest_upper_power_of_2(layer1)
+    layer2 = round_nearest_upper_power_of_2(layer2)
+    
+    # Ensure decreasing pyramid
+    if layer2 >= layer1:
+        layer2 = max(layer1 // 2, n_classes * 2)
+        layer2 = round_nearest_upper_power_of_2(layer2) 
+    
+    # Estimate total parameters (rough)
+    # params ≈ input_dim * layer1 + layer1 * layer2 + layer2 * n_classes
+    total_params = input_dim * layer1 + layer1 * layer2 + layer2 * n_classes
+    
+    # If capacity too high relative to n_train, scale down
+    capacity_ratio = total_params / n_train
+    if capacity_ratio > 2.0:  # Rule of thumb: params < 2 * n_train
+        scale_factor = (2.0 / capacity_ratio) ** 0.5  # Square root for gradual reduction
+        layer1 = round_nearest_upper_power_of_2(int(layer1 * scale_factor))
+        layer2 = round_nearest_upper_power_of_2(int(layer2 * scale_factor))
+    
+    # Determine optimal dropout based on dataset size
+    # Larger datasets → less dropout needed
+    # Smaller datasets → more dropout to prevent overfitting
+    samples_per_feature = n_train / input_dim
+    if samples_per_feature < 10:
+        dropout_rate = 0.5  # High dropout for very small datasets
+    elif samples_per_feature < 50:
+        dropout_rate = 0.3  # Moderate dropout
+    elif samples_per_feature < 200:
+        dropout_rate = 0.2  # Light dropout
+    else:
+        dropout_rate = 0.1  # Minimal dropout for large datasets
+    
+    return (layer1, layer2), dropout_rate

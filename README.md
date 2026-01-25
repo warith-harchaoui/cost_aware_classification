@@ -40,6 +40,26 @@ python -m examples.fraud_detection --loss cross_entropy_weighted --epochs 5 --ru
 
 All OT-based losses use a cost matrix $C$ where $C_{ij}$ represents the cost of predicting class $j$ when the true class is $i$.
 
+#### Understanding Epsilon (ε) Regularization
+
+The entropic regularization parameter ε controls the smoothness of the optimal transport. **By default, ε is computed adaptively from the cost matrix using rule-of-thumb heuristics:**
+
+**Adaptive Epsilon Modes** (recommended):
+- **`offdiag_mean`** (default): ε = mean of off-diagonal costs × scale factor
+- **`offdiag_median`**: ε = median of off-diagonal costs × scale factor  
+- **`offdiag_max`**: ε = maximum off-diagonal cost × scale factor
+
+**Benefits of adaptive ε:**
+- Automatically scales with your cost matrix magnitude
+- No manual tuning required
+- Robust across different problem domains
+- Maintains numerical stability
+
+**Override with constant ε only if:**
+- You have domain expertise suggesting a specific value
+- You're doing controlled experiments comparing different ε values
+- You've validated that a fixed ε outperforms adaptive methods
+
 #### 3. **Sinkhorn-Fenchel-Young Loss** (`sinkhorn_fenchel_young`)
 Implicit Fenchel–Young loss with Frank–Wolfe inner solver. Does not differentiate through the inner optimization.
 
@@ -52,22 +72,40 @@ Implicit Fenchel–Young loss with Frank–Wolfe inner solver. Does not differen
 
 **Run command:**
 ```bash
+# Default: adaptive epsilon (offdiag_mean)
 python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 --run-id fenchel_young
 ```
 
-**Advanced options:**
+**Epsilon control options:**
 ```bash
-# Custom epsilon (regularization parameter)
+# Use median-based adaptive epsilon (more robust to outliers)
 python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
-  --epsilon 0.5 --run-id fy_eps05
+  --epsilon-mode offdiag_median --run-id fy_median
 
-# More inner solver iterations for better convergence
+# Use max-based adaptive epsilon (more conservative)
 python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
-  --cacis-solver-iter 100 --run-id fy_iter100
+  --epsilon-mode offdiag_max --run-id fy_max
+
+# Scale the adaptive epsilon by 0.5 (tighter regularization)
+python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
+  --epsilon-scale 0.5 --run-id fy_scale05
+
+# Scale by 2.0 (looser regularization)
+python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
+  --epsilon-scale 2.0 --run-id fy_scale20
+```
+
+**Advanced: constant epsilon (not recommended unless you know what you're doing):**
+```bash
+# Override with constant epsilon=0.1
+python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
+  --epsilon 0.1 --run-id fy_constant_eps
 ```
 
 **Hyperparameters:**
-- `--epsilon`: Regularization parameter ε (default: auto-computed from cost matrix)
+- `--epsilon-mode`: Adaptive method - `offdiag_mean` (default), `offdiag_median`, `offdiag_max`
+- `--epsilon-scale`: Multiplicative scale factor for adaptive ε (default: 1.0)
+- `--epsilon`: Fixed ε value (overrides adaptive mode; use sparingly)
 - `--cacis-solver-iter`: Frank-Wolfe iterations (default: 50)
 
 #### 4. **Sinkhorn Envelope Loss** (`sinkhorn_envelope`)
@@ -83,24 +121,29 @@ Entropic OT loss with custom Sinkhorn solver and envelope-style gradients.
 
 **Run command:**
 ```bash
+# Default: adaptive epsilon
 python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 --run-id envelope
 ```
 
-**Advanced options:**
+**Epsilon control options:**
 ```bash
+# Use median-based adaptive epsilon
+python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 \
+  --epsilon-mode offdiag_median --run-id env_median
+
+# Tighter regularization via scaling
+python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 \
+  --epsilon-scale 0.5 --run-id env_tight
+
 # More Sinkhorn iterations for convergence
 python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 \
   --sinkhorn-max-iter 100 --run-id envelope_iter100
-
-# Fixed epsilon value
-python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 \
-  --epsilon 0.1 --run-id envelope_eps01
 ```
 
 **Hyperparameters:**
+- `--epsilon-mode`: Adaptive method (default: `offdiag_mean`)
+- `--epsilon-scale`: Scale factor for adaptive ε (default: 1.0)
 - `--sinkhorn-max-iter`: Sinkhorn iterations (default: 50)
-- `--epsilon`: Regularization ε (default: auto from cost matrix)
-- `--epsilon-mode`: How to compute ε: `constant`, `offdiag_mean`, `offdiag_median`, `offdiag_max`
 
 #### 5. **Sinkhorn Full Autodiff Loss** (`sinkhorn_autodiff`)
 Entropic OT loss with full differentiation through Sinkhorn iterations.
@@ -114,19 +157,21 @@ Entropic OT loss with full differentiation through Sinkhorn iterations.
 
 **Run command:**
 ```bash
+# Default: adaptive epsilon
 python -m examples.fraud_detection --loss sinkhorn_autodiff --epochs 5 --run-id autodiff
 ```
 
-**Advanced options:**
+**Epsilon control options:**
 ```bash
-# Fewer iterations to reduce memory (important for autodiff!)
+# Median-based epsilon with fewer iterations (saves memory)
 python -m examples.fraud_detection --loss sinkhorn_autodiff --epochs 5 \
-  --sinkhorn-max-iter 30 --run-id autodiff_iter30
+  --epsilon-mode offdiag_median --sinkhorn-max-iter 30 --run-id autodiff_efficient
 ```
 
 **Hyperparameters:**
+- `--epsilon-mode`: Adaptive method (default: `offdiag_mean`)
+- `--epsilon-scale`: Scale factor (default: 1.0)
 - `--sinkhorn-max-iter`: Sinkhorn iterations (default: 50, consider reducing for memory)
-- `--epsilon`: Regularization ε
 
 **Memory considerations:** This loss stores intermediate tensors for backprop. Use fewer iterations if memory is limited.
 
@@ -143,29 +188,118 @@ Entropic OT loss using the [Python Optimal Transport (POT)](https://pythonot.git
 
 **Run command:**
 ```bash
+# Default: adaptive epsilon
 python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 --run-id pot
 ```
 
-**Advanced options:**
+**Epsilon control options:**
 ```bash
-# More iterations for convergence
+# Use median-based epsilon (recommended for production)
 python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
-  --sinkhorn-max-iter 100 --run-id pot_iter100
+  --epsilon-mode offdiag_median --run-id pot_production
 
-# Custom epsilon
+# Conservative regularization with max-based epsilon
 python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
-  --epsilon 0.2 --run-id pot_eps02
+  --epsilon-mode offdiag_max --sinkhorn-max-iter 100 --run-id pot_conservative
+
+# Fine-tune with epsilon scaling
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
+  --epsilon-scale 0.8 --run-id pot_tuned
 ```
 
 **Hyperparameters:**
+- `--epsilon-mode`: Adaptive method (default: `offdiag_mean`)
+- `--epsilon-scale`: Scale factor (default: 1.0)
 - `--sinkhorn-max-iter`: Maximum Sinkhorn iterations (default: 50)
-- `--epsilon`: Regularization ε (default: auto from cost matrix)
 
 **Benefits:**
 - Mature, optimized implementation
 - GPU support through POT backends
 - Numerical stability improvements
 - Active maintenance by POT community
+
+## 🎛️ Epsilon (ε) Tuning Guide
+
+### Quick Reference
+
+| Epsilon Mode | When to Use | Characteristics |
+|--------------|-------------|-----------------|
+| `offdiag_mean` ✅ | **Default choice** | Balanced, works well in most cases |
+| `offdiag_median` | Outlier-heavy costs | Robust to extreme cost values |
+| `offdiag_max` | Conservative needs | Ensures all costs are regularized |
+
+### Scaling Strategy
+
+The `--epsilon-scale` parameter multiplies the adaptive ε:
+
+| Scale | Effect | Use When |
+|-------|--------|----------|
+| < 1.0 | Tighter regularization, sharper solutions | Costs have clear structure, want crisp decisions |
+| = 1.0 | **Default**, balanced | Start here |
+| > 1.0 | Looser regularization, smoother solutions | Costs are noisy, want robust solutions |
+
+**Example workflow:**
+```bash
+# 1. Start with default
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 --run-id baseline
+
+# 2. If overfitting, increase scale
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
+  --epsilon-scale 2.0 --run-id smoother
+
+# 3. If underfitting, decrease scale
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
+  --epsilon-scale 0.5 --run-id sharper
+```
+
+### Epsilon Scheduling (Advanced)
+
+For longer training runs, you can use **epsilon scheduling** to automatically adjust epsilon over epochs:
+
+#### Exponential Decay Strategy
+
+Start with high epsilon (smooth, stable) and gradually decrease to low epsilon (sharp, decisive):
+
+```bash
+# Exponential decay: 10× base epsilon at epoch 0 → 0.1× at final epoch
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 10 \
+  --epsilon-schedule exponential_decay --run-id scheduled
+```
+
+**How it works:**
+- **Epoch 0**: ε = 10 × base_epsilon (very smooth OT, stable gradients)
+- **Mid-training**: ε gradually decreases exponentially
+- **Final epoch**: ε = 0.1 × base_epsilon (sharp decisions)
+
+**Customize the schedule:**
+```bash
+# Start at 20× and end at 0.05×
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 10 \
+  --epsilon-schedule exponential_decay \
+  --epsilon-schedule-start-mult 20.0 \
+  --epsilon-schedule-end-mult 0.05 \
+  --run-id custom_schedule
+```
+
+**When to use scheduling:**
+- ✅ Long training runs (>10 epochs)
+- ✅ Want stable early training with sharp final predictions
+- ✅ Dealing with difficult optimization landscapes
+- ❌ Not needed for short experiments (<5 epochs)
+
+**Example output** (10 epochs, default schedule):
+```
+Epoch 0: ε = 15.00 (10.0× base)
+Epoch 1: ε =  8.99 (6.0× base)
+Epoch 2: ε =  5.39 (3.6× base)
+...
+Epoch 9: ε =  0.15 (0.1× base)
+```
+
+**Parameters:**
+- `--epsilon-schedule`: `None` (default) or `exponential_decay`
+- `--epsilon-schedule-start-mult`: Starting multiplier (default: 10.0)
+- `--epsilon-schedule-end-mult`: Ending multiplier (default: 0.1)
 
 ## 🚀 Complete Usage Guide
 
@@ -207,7 +341,7 @@ unzip ieee-fraud-detection.zip -d ieee-fraud-detection
 # Train with cross-entropy for 5 epochs
 python -m examples.fraud_detection --loss cross_entropy --epochs 5 --run-id exp1
 
-# Train with SinkhornPOTLoss
+# Train with SinkhornPOTLoss (adaptive epsilon)
 python -m examples.fraud_detection --loss sinkhorn_pot --epochs 10 --run-id pot_exp
 
 # Train with Fenchel-Young loss
@@ -292,21 +426,6 @@ python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
   --device auto --run-id auto_device
 ```
 
-#### Loss-Specific Hyperparameters
-```bash
-# Sinkhorn variants: control iterations
-python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
-  --sinkhorn-max-iter 200 --run-id pot_iter200
-
-# Fenchel-Young: control Frank-Wolfe iterations
-python -m examples.fraud_detection --loss sinkhorn_fenchel_young --epochs 5 \
-  --cacis-solver-iter 200 --run-id fy_iter200
-
-# All Sinkhorn: fixed regularization
-python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 \
-  --epsilon 0.5 --run-id env_eps05
-```
-
 ### Output Artifacts
 
 Each run creates a directory `fraud_output/<run-id>/<loss_name>/` with:
@@ -340,9 +459,9 @@ train_realized_regret_ema.png      # Training realized regret
 | `sinkhorn_fenchel_young` | Provably stable gradients | Custom implementation | Research, reproducibility |
 | `sinkhorn_envelope` | Stable, memory efficient | Custom implementation | When memory is limited |
 | `sinkhorn_autodiff` | End-to-end learning | High memory, less stable | Research comparison |
-| `sinkhorn_pot` | Production-ready, optimized | External dependency | Production deployments |
+| `sinkhorn_pot` | Production-ready, optimized | External dependency | **Production deployments** ⭐ |
 
-**Recommendation for production:** Start with `sinkhorn_pot` for reliability and performance.
+**Recommendation for production:** Start with `sinkhorn_pot` with default adaptive epsilon (`offdiag_mean`).
 
 **Recommendation for research:** Compare `sinkhorn_envelope`, `sinkhorn_autodiff`, and `sinkhorn_fenchel_young` to understand gradient quality vs computational trade-offs.
 
@@ -352,15 +471,17 @@ train_realized_regret_ema.png      # Training realized regret
 - [`docs/fraud_business_and_cost_matrix.md`](docs/fraud_business_and_cost_matrix.md) — Business value model and per-example cost matrix construction for fraud detection
 - [`examples/sinkhorn_pot_example.py`](examples/sinkhorn_pot_example.py) — Standalone example demonstrating SinkhornPOTLoss usage
 
-## 🔬 Example: Comparing All Losses
+## 🔬 Example: Comprehensive Benchmark
 
 ```bash
-# Comprehensive benchmark with all losses
+# Benchmark all losses with optimized settings
 python -m examples.fraud_detection \
   --loss all \
   --epochs 10 \
   --batch-size 512 \
   --lr 1e-4 \
+  --epsilon-mode offdiag_median \
+  --epsilon-scale 1.0 \
   --sinkhorn-max-iter 100 \
   --cacis-solver-iter 100 \
   --run-id comprehensive_benchmark

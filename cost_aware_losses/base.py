@@ -112,6 +112,15 @@ class CostAwareLoss(Module, ABC):
         Multiplicative factor applied to the data-driven ε statistic.
     epsilon_min:
         Lower bound to prevent numerical issues.
+    epsilon_schedule:
+        Optional scheduling strategy: None, "exponential_decay".
+        When enabled, epsilon is multiplied by a time-varying factor.
+    schedule_start_mult:
+        Starting multiplier for epsilon schedule (default: 10.0).
+    schedule_end_mult:
+        Ending multiplier for epsilon schedule (default: 0.1).
+    total_epochs:
+        Total number of training epochs (required if epsilon_schedule is set).
     """
 
     def __init__(
@@ -121,20 +130,77 @@ class CostAwareLoss(Module, ABC):
         epsilon: Optional[float] = None,
         epsilon_scale: float = 1.0,
         epsilon_min: float = 1e-8,
+        epsilon_schedule: Optional[str] = None,
+        schedule_start_mult: float = 10.0,
+        schedule_end_mult: float = 0.1,
+        total_epochs: Optional[int] = None,
     ) -> None:
         super().__init__()
 
         if epsilon_mode == "constant" and epsilon is None:
             raise ValueError("epsilon must be provided when epsilon_mode='constant'.")
+        
+        if epsilon_schedule is not None and epsilon_schedule not in ("exponential_decay",):
+            raise ValueError(f"Unknown epsilon_schedule: {epsilon_schedule}")
+        
+        if epsilon_schedule is not None and total_epochs is None:
+            raise ValueError("total_epochs must be provided when epsilon_schedule is set.")
 
         self.epsilon_mode = epsilon_mode
         self.epsilon = epsilon
         self.epsilon_scale = float(epsilon_scale)
         self.epsilon_min = float(epsilon_min)
+        
+        # Scheduling
+        self.epsilon_schedule = epsilon_schedule
+        self.schedule_start_mult = float(schedule_start_mult)
+        self.schedule_end_mult = float(schedule_end_mult)
+        self.total_epochs = int(total_epochs) if total_epochs is not None else None
+        self.current_epoch = 0
 
+    def set_epoch(self, epoch: int) -> None:
+        """
+        Update the current epoch for epsilon scheduling.
+        
+        Parameters
+        ----------
+        epoch:
+            Current epoch (0-indexed).
+        """
+        self.current_epoch = int(epoch)
+    
+    def _compute_schedule_multiplier(self) -> float:
+        """
+        Compute the schedule multiplier for current epoch.
+        
+        Returns
+        -------
+        float
+            Multiplier to apply to base epsilon.
+        """
+        if self.epsilon_schedule is None:
+            return 1.0
+        
+        if self.epsilon_schedule == "exponential_decay":
+            # Exponential decay: start_mult * (end_mult / start_mult) ^ (t / T)
+            # where t = current_epoch, T = total_epochs - 1
+            if self.total_epochs is None or self.total_epochs <= 1:
+                return 1.0
+            
+            progress = float(self.current_epoch) / float(self.total_epochs - 1)
+            progress = min(max(progress, 0.0), 1.0)  # Clamp to [0, 1]
+            
+            ratio = self.schedule_end_mult / self.schedule_start_mult
+            multiplier = self.schedule_start_mult * (ratio ** progress)
+            return multiplier
+        
+        return 1.0
+    
     def compute_epsilon(self, C: Tensor) -> Tensor:
         """
         Determine the temperature/regularization parameter ε from the cost matrix.
+        
+        Applies scheduling if enabled.
 
         Parameters
         ----------
@@ -146,13 +212,20 @@ class CostAwareLoss(Module, ABC):
         Tensor
             Scalar ε if C is (K, K), or shape (B,) if C is (B, K, K).
         """
+        # Compute base epsilon
         if self.epsilon_mode == "constant":
             eps = torch.as_tensor(self.epsilon, device=C.device, dtype=C.dtype)
         else:
             stat = self.epsilon_mode.replace("offdiag_", "")
             eps = off_diagonal_stat(C, stat)  # type: ignore[arg-type]
 
+        # Apply static scale
         eps = eps * self.epsilon_scale
+        
+        # Apply schedule multiplier
+        schedule_mult = self._compute_schedule_multiplier()
+        eps = eps * schedule_mult
+        
         return torch.clamp(eps, min=self.epsilon_min)
 
     @staticmethod
