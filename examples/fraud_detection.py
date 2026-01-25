@@ -699,7 +699,7 @@ def train_one(
             cost_aware_loss.set_epoch(epoch - epoch_start)
         
         model.train()
-        pbar = tqdm(train_loader, desc=f"[{loss_name}] Epoch {epoch+1}/{target_epochs}", total=len(train_loader))
+        pbar = tqdm(train_loader, desc=f"[{loss_name}] Epoch {epoch+1}/{target_epochs}", total=len(train_loader), mininterval=1.0)
 
         for step, (x, y, C, w) in enumerate(pbar):
             if quick and step >= 5:
