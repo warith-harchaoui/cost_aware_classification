@@ -284,7 +284,7 @@ class SinkhornPOTLoss(CostAwareLoss):
         epsilon_scale: float = 1.0,
         epsilon_min: float = 1e-8,
         max_iter: int = 50,
-        stopThr: float = 1e-9,
+        stopThr: float = 1e-6,
         label_smoothing: float = 1e-3,
         method: Literal["sinkhorn", "sinkhorn_log"] = "sinkhorn_log",
         allow_numpy_fallback: bool = False,
