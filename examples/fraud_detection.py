@@ -57,7 +57,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from sklearn.metrics import average_precision_score, precision_recall_curve
@@ -582,6 +581,8 @@ def train_one(
     optimizer: torch.optim.Optimizer,
     train_loader: DataLoader,
     val_loader: DataLoader,
+    val_prevalence: float,
+    train_prevalence: float,
     probe_loader: DataLoader,
     device: torch.device,
     epochs_additional: int,
@@ -846,29 +847,29 @@ def train_one(
 
         # PR curve on full validation
         prec, rec, pr_auc = pr_curve(model, val_loader, device)
-        # Plot
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.plot(rec, prec, marker=".", label=f"AP={pr_auc:.4f}")
         
-        # Luck baseline (no-skill) = prevalence = sum(y)/len(y)
-        # To get y_true, we need to iterate through the val_loader
-        y_true_list = []
-        for _, y, _, _ in val_loader:
-            y_true_list.append(y)
-        y_true = torch.cat(y_true_list).cpu().numpy()
-        prevalence = y_true.sum() / len(y_true)
-        ax.axhline(prevalence, color="gray", linestyle="--", label=f"Luck ({prevalence:.4f})")
-        
-        ax.set_title(f"{loss_name} — Validation Precision–Recall (Epoch {epoch+1})")
-        ax.set_xlabel("Recall")
-        ax.set_ylabel("Precision")
-        ax.legend()
-        ax.grid(True)
-        fig.tight_layout()
-        try:
-            fig.savefig(run_dir / "precision_recall_curve.png")
-        finally:
-            plt.close(fig)
+        plot_precision_recall_curve(
+            precision=prec,
+            recall=rec,
+            out_path=run_dir / "precision_recall_curve.png",
+            title=f"{loss_name} — Validation Precision–Recall (Epoch {epoch+1})",
+            average_precision=pr_auc,
+            prevalence=val_prevalence,
+        )
+
+        # PR curve on training set (for monitoring overfitting)
+        # We reuse the train_loader (shuffled, but safe for global PR curve) or a subset if extremely large.
+        # Given MLP speed, full pass is acceptable.
+        if not quick or epoch == target_epochs - 1: # Always for full run, or last epoch of quick
+            prec_train, rec_train, pr_auc_train = pr_curve(model, train_loader, device)
+            plot_precision_recall_curve(
+                precision=prec_train,
+                recall=rec_train,
+                out_path=run_dir / "train_precision_recall_curve.png",
+                title=f"{loss_name} — Train Precision–Recall (Epoch {epoch+1})",
+                average_precision=pr_auc_train,
+                prevalence=train_prevalence,
+            )
 
         # Best checkpoint update
         score = float(val_metrics.get(save_best_by, float("nan")))
@@ -946,7 +947,8 @@ def main() -> None:
     parser.add_argument(
         "--loss",
         type=str,
-        default="all",
+        nargs="+",
+        default=["all"],
         choices=[
             "all",
             "cross_entropy",
@@ -1018,7 +1020,8 @@ def main() -> None:
     if args.device == "auto":
         device = get_device()
         # Override for POT-based losses on Apple Silicon: CPU is faster than MPS
-        if args.loss == "sinkhorn_pot" and device.type == "mps":
+        # Override for POT-based losses on Apple Silicon: CPU is faster than MPS
+        if "sinkhorn_pot" in args.loss and device.type == "mps":
             logging.info("Overriding device: MPS → CPU (faster for sinkhorn_pot on Apple Silicon)")
             device = torch.device("cpu")
     else:
@@ -1050,17 +1053,20 @@ def main() -> None:
 
     logging.info("Loading train transactions from %s ...", train_csv)
     full_df = pd.read_csv(train_csv, engine="python")
-    if "TransactionAmt" not in full_df.columns or "isFraud" not in full_df.columns:
-        raise ValueError("Expected IEEE-CIS columns: TransactionAmt and isFraud.")
+    if "TransactionAmt" not in full_df.columns or "isFraud" not in full_df.columns or "TransactionDT" not in full_df.columns:
+        raise ValueError("Expected IEEE-CIS columns: TransactionAmt, isFraud, TransactionDT.")
+
+    # Sort by TransactionDT for temporal split
+    logging.info("Sorting by TransactionDT for temporal split...")
+    full_df = full_df.sort_values("TransactionDT").reset_index(drop=True)
 
     # Split
-    train_df, val_df = train_test_split(
-        full_df,
-        test_size=float(args.split),
-        stratify=full_df["isFraud"],
-        random_state=42,
-    )
-    logging.info("Split: train=%d, val=%d", len(train_df), len(val_df))
+    split_idx = int(len(full_df) * (1 - float(args.split)))
+    train_df = full_df.iloc[:split_idx].copy()
+    val_df = full_df.iloc[split_idx:].copy()
+    
+    # train_test_split removed in favor of temporal split
+    logging.info("Temporal Split: train=%d, val=%d (split_idx=%d)", len(train_df), len(val_df), split_idx)
 
     train_df2, val_df2, feature_cols = make_features(train_df, val_df)
 
@@ -1097,6 +1103,10 @@ def main() -> None:
 
     train_loader = DataLoader(train_ds, batch_size=int(args.batch_size), shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
+    
+    val_prevalence = float(val_df2["isFraud"].mean())
+    train_prevalence = float(train_df2["isFraud"].mean())
+    logging.info("Prevalence: train=%.4f, val=%.4f", train_prevalence, val_prevalence)
 
     # Fixed probe subset for iteration plots (deterministic)
     probe_size = int(args.probe_size)
@@ -1145,7 +1155,7 @@ def main() -> None:
 
     # Methods
     methods: List[LossName]
-    if args.loss == "all":
+    if "all" in args.loss:
         methods = [
             "cross_entropy",
             "cross_entropy_weighted",
@@ -1155,7 +1165,7 @@ def main() -> None:
             "sinkhorn_pot",
         ]
     else:
-        methods = [args.loss]  # type: ignore[assignment]
+        methods = args.loss  # type: ignore[assignment]
 
     run_config: Dict[str, Any] = vars(args).copy()
     run_config["device_resolved"] = str(device)
@@ -1180,6 +1190,8 @@ def main() -> None:
                 optimizer=optimizer,
                 train_loader=train_loader,
                 val_loader=val_loader,
+                val_prevalence=val_prevalence,
+                train_prevalence=train_prevalence,
                 probe_loader=probe_loader,
                 device=device,
                 epochs_additional=int(args.epochs),

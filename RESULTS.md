@@ -37,7 +37,7 @@ Should match POT results closely.
 ![Sinkhorn Envelope Regret](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_regret.png)
 
 ## How to Reproduce
-Run the full benchmark (approx. several hours on CPU):
+Run the full benchmark with temporal split (approx. several hours on CPU):
 ```bash
-python -m examples.fraud_detection --loss all --epochs 15 --epsilon-scale 2.0 --run-id all_full --device cpu
+python -m examples.fraud_detection --loss all --epochs 15 --epsilon-scale 2.0 --run-id all_temporal --device cpu
 ```

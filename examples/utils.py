@@ -267,6 +267,7 @@ def plot_precision_recall_curve(
     out_path: PathLike,
     title: str,
     average_precision: Optional[float] = None,
+    prevalence: Optional[float] = None,
 ) -> None:
     """
     Plot a precision–recall curve.
@@ -283,22 +284,27 @@ def plot_precision_recall_curve(
         Plot title.
     average_precision:
         Optional Average Precision (AP) for annotation.
+    prevalence:
+        Optional prevalence (positive rate) for "Luck" baseline.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(6, 5))
-    plt.plot(recall, precision, linewidth=2)
+    
+    label = f"AP={average_precision:.4f}" if average_precision is not None else None
+    plt.plot(recall, precision, linewidth=2, label=label, marker=".")
 
-    if average_precision is not None:
-        plt.title(f"{title}\nAP={average_precision:.4f}")
-    else:
-        plt.title(title)
+    if prevalence is not None:
+        plt.axhline(prevalence, color="gray", linestyle="--", label=f"Luck ({prevalence:.4f})")
 
+    plt.title(title)
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.ylim(0.0, 1.05)
     plt.xlim(0.0, 1.0)
+    plt.legend(loc="best")
+    plt.grid(True)
 
     ax = plt.gca()
     ax.spines["top"].set_visible(False)
