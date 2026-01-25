@@ -305,7 +305,7 @@ Epoch 9: ε =  0.15 (0.1× base)
 
 ### Device Selection
 
-**Apple Silicon (M1/M2/M3):**
+**Apple Silicon (M*):**
 ```bash
 # CPU is often faster than MPS for POT-based losses
 python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 --device cpu

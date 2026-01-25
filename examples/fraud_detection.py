@@ -615,11 +615,11 @@ def save_state_csvs(state: TrainingState, out_dir: Path) -> None:
             train_df[k] = v
         train_df.to_csv(out_dir / "train_ema_metrics.csv", index=False)
 
-    if state.probe_iters:
-        probe_df = pd.DataFrame({"iter": state.probe_iters})
-        for k, v in state.probe_points.items():
-            probe_df[k] = v
-        probe_df.to_csv(out_dir / "probe_metrics.csv", index=False)
+    if state.val_iters:
+        val_df = pd.DataFrame({"iter": state.val_iters})
+        for k, v in state.val_points.items():
+            val_df[k] = v
+        val_df.to_csv(out_dir / "val_metrics.csv", index=False)
 
 
 def train_one(
@@ -632,7 +632,7 @@ def train_one(
     val_loader: DataLoader,
     val_prevalence: float,
     train_prevalence: float,
-    probe_loader: DataLoader,
+    val_loader_subset: DataLoader,
     device: torch.device,
     epochs_additional: int,
     quick: bool,
@@ -789,19 +789,19 @@ def train_one(
                 "regret*": f"{train_metrics['train_expected_opt_regret']:.2f}",
             })
 
-            # Periodic probe evaluation
+            # Periodic validation evaluation (subset)
             if eval_every > 0 and (state.current_iter % eval_every == 0):
-                probe_metrics = eval_on_loader(model, probe_loader, device)
-                state.probe_iters.append(state.current_iter)
-                for k, v in probe_metrics.items():
-                    state.probe_points.setdefault(k, []).append(float(v))
+                val_subset_metrics = eval_on_loader(model, val_loader_subset, device)
+                state.val_iters.append(state.current_iter)
+                for k, v in val_subset_metrics.items():
+                    state.val_points.setdefault(k, []).append(float(v))
                 logging.info(
-                    "[%s] iter=%d | probe PR-AUC=%.4f | regret(exp*)=%.4f | regret(real)=%.4f",
+                    "[%s] iter=%d | val(sub) PR-AUC=%.4f | regret(exp*)=%.4f | regret(real)=%.4f",
                     loss_name,
                     state.current_iter,
-                    probe_metrics["pr_auc"],
-                    probe_metrics["expected_opt_regret"],
-                    probe_metrics["realized_regret"],
+                    val_subset_metrics["pr_auc"],
+                    val_subset_metrics["expected_opt_regret"],
+                    val_subset_metrics["realized_regret"],
                 )
 
             # Iteration-based checkpointing
@@ -841,16 +841,12 @@ def train_one(
 
         # Train EMA plots
         if "train_expected_opt_regret" in state.train_ema:
-            # Baseline is best constant strategy (min of approve-all vs decline-all EMAs)
-            naive_base = None
-            if "train_naive_approve_expected_regret" in state.train_ema and \
-               "train_naive_decline_expected_regret" in state.train_ema:
-                
-                base_app = np.array(state.train_ema["train_naive_approve_expected_regret"])
-                base_dec = np.array(state.train_ema["train_naive_decline_expected_regret"])
-                # Truncate to min length if needed (though usually same)
-                min_len = min(len(base_app), len(base_dec))
-                naive_base = np.minimum(base_app[:min_len], base_dec[:min_len])
+            # Baselines: Approve All vs Decline All (Best Constant is visually inferred or can be plotted if needed, but user requested 2 curves)
+            baselines = {}
+            if "train_naive_approve_expected_regret" in state.train_ema:
+                baselines["Naive (Approve)"] = state.train_ema["train_naive_approve_expected_regret"]
+            if "train_naive_decline_expected_regret" in state.train_ema:
+                baselines["Naive (Decline)"] = state.train_ema["train_naive_decline_expected_regret"]
 
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
@@ -859,18 +855,14 @@ def train_one(
                 title=f"{loss_name} — Train expected optimal regret (EMA)",
                 ylabel="€ regret (expected, optimal action)",
                 epoch_iters=state.epoch_iters,
-                baseline_values=naive_base,
-                baseline_label="Naive (Best Constant)",
+                baselines=baselines,
             )
         if "train_realized_regret" in state.train_ema:
-            naive_base_real = None
-            if "train_naive_approve_realized_regret" in state.train_ema and \
-               "train_naive_decline_realized_regret" in state.train_ema:
-                
-                base_app = np.array(state.train_ema["train_naive_approve_realized_regret"])
-                base_dec = np.array(state.train_ema["train_naive_decline_realized_regret"])
-                min_len = min(len(base_app), len(base_dec))
-                naive_base_real = np.minimum(base_app[:min_len], base_dec[:min_len])
+            baselines_real = {}
+            if "train_naive_approve_realized_regret" in state.train_ema:
+                baselines_real["Naive (Approve)"] = state.train_ema["train_naive_approve_realized_regret"]
+            if "train_naive_decline_realized_regret" in state.train_ema:
+                baselines_real["Naive (Decline)"] = state.train_ema["train_naive_decline_realized_regret"]
 
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
@@ -879,8 +871,7 @@ def train_one(
                 title=f"{loss_name} — Train realized regret (EMA)",
                 ylabel="€ regret (realized)",
                 epoch_iters=state.epoch_iters,
-                baseline_values=naive_base_real,
-                baseline_label="Naive (Best Constant)",
+                baselines=baselines_real,
             )
             
         if "train_pr_auc" in state.train_ema:
@@ -894,57 +885,51 @@ def train_one(
                 y_quantile_max=None,
             )
 
-        # Probe plots
-        if state.probe_iters:
-            if "pr_auc" in state.probe_points:
+        # Validation (Subset) plots
+        if state.val_iters:
+            if "pr_auc" in state.val_points:
                 plot_metric_trajectory(
-                    iters=state.probe_iters,
-                    values=state.probe_points["pr_auc"],
-                    out_path=run_dir / "probe_pr_auc.png",
-                    title=f"{loss_name} — Probe PR-AUC vs iteration",
+                    iters=state.val_iters,
+                    values=state.val_points["pr_auc"],
+                    out_path=run_dir / "val_pr_auc.png",
+                    title=f"{loss_name} — Validation PR-AUC vs iteration",
                     ylabel="PR-AUC",
                     epoch_iters=state.epoch_iters,
                     y_quantile_max=None,
                 )
-            if "expected_opt_regret" in state.probe_points:
-                # Baseline: Best Constant Strategy (Cost)
-                naive_base_probe = None
-                if "naive_approve_expected_cost" in state.probe_points and \
-                   "naive_decline_expected_cost" in state.probe_points:
-                    app = np.array(state.probe_points["naive_approve_expected_cost"])
-                    dec = np.array(state.probe_points["naive_decline_expected_cost"])
-                    min_len = min(len(app), len(dec))
-                    naive_base_probe = np.minimum(app[:min_len], dec[:min_len])
+            if "expected_opt_regret" in state.val_points:
+                # Baseline: Naive Approve / Decline
+                baselines_val = {}
+                if "naive_approve_expected_cost" in state.val_points:
+                    baselines_val["Naive (Approve)"] = state.val_points["naive_approve_expected_cost"]
+                if "naive_decline_expected_cost" in state.val_points:
+                    baselines_val["Naive (Decline)"] = state.val_points["naive_decline_expected_cost"]
 
                 plot_metric_trajectory(
-                    iters=state.probe_iters,
-                    values=state.probe_points["expected_opt_regret"],
-                    out_path=run_dir / "probe_expected_opt_regret.png",
-                    title=f"{loss_name} — Probe expected optimal regret vs iteration",
+                    iters=state.val_iters,
+                    values=state.val_points["expected_opt_regret"],
+                    out_path=run_dir / "val_expected_opt_regret.png",
+                    title=f"{loss_name} — Validation expected optimal regret vs iteration",
                     ylabel="€ regret (expected, optimal action)",
                     epoch_iters=state.epoch_iters,
-                    baseline_values=naive_base_probe,
-                    baseline_label="Naive (Best Constant)",
+                    baselines=baselines_val,
                 )
-            if "realized_regret" in state.probe_points:
-                # Baseline: Best Constant Strategy (Cost)
-                naive_base_real_probe = None
-                if "naive_approve_realized_cost" in state.probe_points and \
-                   "naive_decline_realized_cost" in state.probe_points:
-                    app = np.array(state.probe_points["naive_approve_realized_cost"])
-                    dec = np.array(state.probe_points["naive_decline_realized_cost"])
-                    min_len = min(len(app), len(dec))
-                    naive_base_real_probe = np.minimum(app[:min_len], dec[:min_len])
+            if "realized_regret" in state.val_points:
+                # Baseline: Naive Approve / Decline
+                baselines_val_real = {}
+                if "naive_approve_realized_cost" in state.val_points:
+                    baselines_val_real["Naive (Approve)"] = state.val_points["naive_approve_realized_cost"]
+                if "naive_decline_realized_cost" in state.val_points:
+                    baselines_val_real["Naive (Decline)"] = state.val_points["naive_decline_realized_cost"]
 
                 plot_metric_trajectory(
-                    iters=state.probe_iters,
-                    values=state.probe_points["realized_regret"],
-                    out_path=run_dir / "probe_realized_regret.png",
-                    title=f"{loss_name} — Probe realized regret vs iteration",
+                    iters=state.val_iters,
+                    values=state.val_points["realized_regret"],
+                    out_path=run_dir / "val_realized_regret.png",
+                    title=f"{loss_name} — Validation realized regret vs iteration",
                     ylabel="€ regret (realized)",
                     epoch_iters=state.epoch_iters,
-                    baseline_values=naive_base_real_probe,
-                    baseline_label="Naive (Best Constant)",
+                    baselines=baselines_val_real,
                 )
 
         # PR curve on full validation
@@ -1217,13 +1202,13 @@ def main() -> None:
     train_prevalence = float(train_df2["isFraud"].mean())
     logging.info("Prevalence: train=%.4f, val=%.4f", train_prevalence, val_prevalence)
 
-    # Fixed probe subset for iteration plots (deterministic)
+    # Fixed validation subset for iteration plots (deterministic)
     probe_size = int(args.probe_size)
     rng = np.random.default_rng(123)
     idx = rng.choice(len(val_ds), size=min(probe_size, len(val_ds)), replace=False)
-    probe_subset = torch.utils.data.Subset(val_ds, idx.tolist())
-    probe_loader = DataLoader(probe_subset, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
-    logging.info("Probe set size: %d", len(probe_subset))
+    val_subset = torch.utils.data.Subset(val_ds, idx.tolist())
+    val_loader_subset = DataLoader(val_subset, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
+    logging.info("Validation subset size: %d", len(val_subset))
 
     # Parse hidden dims
     hidden_dims: Tuple[int, ...]
@@ -1301,7 +1286,7 @@ def main() -> None:
                 val_loader=val_loader,
                 val_prevalence=val_prevalence,
                 train_prevalence=train_prevalence,
-                probe_loader=probe_loader,
+                val_loader_subset=val_loader_subset,
                 device=device,
                 epochs_additional=int(args.epochs),
                 quick=bool(args.quick),

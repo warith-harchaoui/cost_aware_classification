@@ -88,11 +88,11 @@ class TrainingState:
         Keys are metric names; values are sequences aligned with ``train_ema_iters``.
     train_ema_iters:
         Iteration indices for EMA points.
-    probe_points:
-        Periodic evaluation points on a fixed validation probe set.
-        Keys are metric names; values are sequences aligned with ``probe_iters``.
-    probe_iters:
-        Iteration indices for probe evaluation points.
+    val_points:
+        Periodic evaluation points on a validation subset.
+        Keys are metric names; values are sequences aligned with ``val_iters``.
+    val_iters:
+        Iteration indices for validation evaluation points.
     epoch_iters:
         Iteration indices at epoch boundaries (for vertical lines in plots).
     """
@@ -102,8 +102,8 @@ class TrainingState:
     train_ema: Dict[str, List[float]] = field(default_factory=dict)
     train_ema_iters: List[int] = field(default_factory=list)
 
-    probe_points: Dict[str, List[float]] = field(default_factory=dict)
-    probe_iters: List[int] = field(default_factory=list)
+    val_points: Dict[str, List[float]] = field(default_factory=dict)
+    val_iters: List[int] = field(default_factory=list)
 
     epoch_iters: List[int] = field(default_factory=lambda: [0])
 
@@ -127,8 +127,8 @@ def training_state_to_dict(state: TrainingState) -> Dict[str, Any]:
         "current_iter": int(state.current_iter),
         "train_ema": {k: list(map(float, v)) for k, v in state.train_ema.items()},
         "train_ema_iters": list(map(int, state.train_ema_iters)),
-        "probe_points": {k: list(map(float, v)) for k, v in state.probe_points.items()},
-        "probe_iters": list(map(int, state.probe_iters)),
+        "val_points": {k: list(map(float, v)) for k, v in state.val_points.items()},
+        "val_iters": list(map(int, state.val_iters)),
         "epoch_iters": list(map(int, state.epoch_iters)),
     }
 
@@ -153,8 +153,8 @@ def training_state_from_dict(d: Dict[str, Any]) -> TrainingState:
     )
     state.train_ema = {str(k): list(map(float, v)) for k, v in (d.get("train_ema") or {}).items()}
     state.train_ema_iters = list(map(int, d.get("train_ema_iters") or []))
-    state.probe_points = {str(k): list(map(float, v)) for k, v in (d.get("probe_points") or {}).items()}
-    state.probe_iters = list(map(int, d.get("probe_iters") or []))
+    state.val_points = {str(k): list(map(float, v)) for k, v in (d.get("val_points") or d.get("probe_points") or {}).items()}
+    state.val_iters = list(map(int, d.get("val_iters") or d.get("probe_iters") or []))
     state.epoch_iters = list(map(int, d.get("epoch_iters") or [0]))
     return state
 
@@ -199,18 +199,16 @@ def plot_metric_trajectory(
     ylabel: str,
     epoch_iters: Optional[Sequence[int]] = None,
     y_quantile_max: Optional[float] = 0.98,
-    baseline_values: Optional[Sequence[float]] = None,
-    baseline_label: str = "Baseline",
+
+    baselines: Optional[Dict[str, Sequence[float]]] = None,
 ) -> None:
     """
     Plot a single metric vs training iterations.
     
     Parameters
     ----------
-    baseline_values:
-        Optional baseline metric values (same length as iters).
-    baseline_label:
-        Label for the baseline curve.
+    baselines:
+        Optional dictionary of {label: values} for baseline curves.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,12 +219,15 @@ def plot_metric_trajectory(
     plt.figure(figsize=(12, 4.5))
     plt.plot(it, val, linewidth=2, label="Model")
 
-    if baseline_values is not None:
-        base_val = np.asarray(list(baseline_values), dtype=float)
-        # Handle length mismatch if any
-        min_len = min(len(it), len(base_val))
-        plt.plot(it[:min_len], base_val[:min_len], 
-                 linestyle="--", color="gray", alpha=0.7, label=baseline_label)
+    if baselines:
+        # Define some line styles/colors for baselines
+        styles = [("--", "gray"), (":", "red"), ("-.", "blue")]
+        for i, (label, b_vals) in enumerate(baselines.items()):
+            b_arr = np.asarray(list(b_vals), dtype=float)
+            min_len = min(len(it), len(b_arr))
+            style, color = styles[i % len(styles)]
+            plt.plot(it[:min_len], b_arr[:min_len], 
+                     linestyle=style, color=color, alpha=0.7, label=label)
 
     if epoch_iters:
         first = True
@@ -241,12 +242,21 @@ def plot_metric_trajectory(
 
     if y_quantile_max is not None and val.size > 0:
         top = float(np.quantile(val, float(y_quantile_max)))
-        if baseline_values is not None and len(baseline_values) > 0:
-            top = max(top, float(np.quantile(baseline_values, float(y_quantile_max))))
-            
+    if y_quantile_max is not None and val.size > 0:
+        top = float(np.quantile(val, float(y_quantile_max)))
         bottom = float(np.min(val))
-        if baseline_values is not None and len(baseline_values) > 0:
-             bottom = min(bottom, float(np.min(baseline_values)))
+        
+        if baselines:
+            for b_vals in baselines.values():
+                b_arr = np.asarray(list(b_vals), dtype=float)
+                if len(b_arr) > 0:
+                     # For baselines, we might want full range or quantile? 
+                     # Let's use quantile 0.98 for top to avoid spikes, min for bottom
+                     top = max(top, float(np.quantile(b_arr, float(y_quantile_max))))
+                     bottom = min(bottom, float(np.min(b_arr)))
+             
+        pad = 0.1 * (top - bottom + 1e-12)
+        plt.ylim(bottom - pad, top + pad)
              
         pad = 0.1 * (top - bottom + 1e-12)
         plt.ylim(bottom - pad, top + pad)
