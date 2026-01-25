@@ -7,8 +7,13 @@ Benchmark runner for IEEE-CIS (Kaggle) fraud detection comparing:
 - cross_entropy
 - cross_entropy_weighted (sample-weighted CE with w_i = C_i[y_i, 1-y_i])
 - sinkhorn_fenchel_young (Fenchel–Young / Sinkhorn-FY-style)
-- sinkhorn_envelope (POT Sinkhorn OT-loss, envelope gradient)
-- sinkhorn_autodiff (POT Sinkhorn OT-loss, full autodiff)
+- sinkhorn_envelope (custom Sinkhorn OT-loss, envelope gradient)
+- sinkhorn_autodiff (custom Sinkhorn OT-loss, full autodiff)
+- sinkhorn_pot (POT library Sinkhorn OT-loss, envelope gradient)
+
+Author
+------
+Warith Harchaoui <wharchaoui@nexton-group.com>
 
 Key design choices
 ------------------
@@ -309,6 +314,7 @@ LossName = Literal[
     "sinkhorn_fenchel_young",
     "sinkhorn_envelope",
     "sinkhorn_autodiff",
+    "sinkhorn_pot",
 ]
 
 def make_cost_aware_loss(
@@ -326,7 +332,12 @@ def make_cost_aware_loss(
     The cost-aware losses are expected to live in the ``cost_aware_losses`` package
     you generated earlier (SinkhornFenchelYoungLoss, SinkhornEnvelopeLoss, SinkhornFullAutodiffLoss).
     """
-    from cost_aware_losses import SinkhornFenchelYoungLoss, SinkhornEnvelopeLoss, SinkhornFullAutodiffLoss  # type: ignore
+    from cost_aware_losses import (  # type: ignore
+        SinkhornFenchelYoungLoss,
+        SinkhornEnvelopeLoss,
+        SinkhornFullAutodiffLoss,
+        SinkhornPOTLoss,
+    )
 
     eps_mode = "constant" if epsilon is not None else "offdiag_mean"
 
@@ -336,6 +347,8 @@ def make_cost_aware_loss(
         return SinkhornEnvelopeLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
     if loss_name == "sinkhorn_autodiff":
         return SinkhornFullAutodiffLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
+    if loss_name == "sinkhorn_pot":
+        return SinkhornPOTLoss(epsilon_mode=eps_mode, epsilon=epsilon, max_iter=sinkhorn_max_iter)
 
     raise ValueError(f"Not a cost-aware loss: {loss_name}")
 
@@ -544,7 +557,7 @@ def train_one(
     # -----------------------
     ce_loss = nn.CrossEntropyLoss()
     cost_aware_loss = None
-    if loss_name in ("sinkhorn_fenchel_young", "sinkhorn_envelope", "sinkhorn_autodiff"):
+    if loss_name in ("sinkhorn_fenchel_young", "sinkhorn_envelope", "sinkhorn_autodiff", "sinkhorn_pot"):
         cost_aware_loss = make_cost_aware_loss(
             loss_name,
             epsilon=epsilon,
@@ -790,6 +803,7 @@ def main() -> None:
             "sinkhorn_fenchel_young",
             "sinkhorn_envelope",
             "sinkhorn_autodiff",
+            "sinkhorn_pot",
         ],
     )
 
@@ -930,6 +944,7 @@ def main() -> None:
             "sinkhorn_fenchel_young",
             "sinkhorn_envelope",
             "sinkhorn_autodiff",
+            "sinkhorn_pot",
         ]
     else:
         methods = [args.loss]  # type: ignore[assignment]

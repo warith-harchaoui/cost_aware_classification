@@ -21,6 +21,10 @@ optimum w.r.t. the outer parameters without differentiating the argmin.
 This mirrors the CACIS design philosophy: *do not backpropagate through the inner
 solver*.
 
+Author
+------
+Warith Harchaoui <wharchaoui@nexton-group.com>
+
 Usage
 -----
 >>> import torch

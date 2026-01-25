@@ -29,6 +29,10 @@ regularization parameter is commonly denoted ``reg``. In this repository we use
 
 See ``docs/math.md`` for a concise explanation.
 
+Author
+------
+Warith Harchaoui <wharchaoui@nexton-group.com>
+
 Usage
 -----
 Subclass :class:`CostAwareLoss` and implement :meth:`_loss_per_example`.

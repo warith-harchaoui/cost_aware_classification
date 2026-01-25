@@ -11,6 +11,10 @@ This can be more "end-to-end", but comes with:
 - higher memory usage (saving intermediate tensors for backprop),
 - potentially less stable gradients for long iteration counts.
 
+Author
+------
+Warith Harchaoui <wharchaoui@nexton-group.com>
+
 Usage
 -----
 >>> import torch

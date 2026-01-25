@@ -1,5 +1,15 @@
+# Some files
+*.zip
+*.pyc
+
+# Some folders
+ieee-fraud-detection/
+*/__pycache__/
+fraud_output/
+
+
 # Byte-compiled / optimized / DLL files
-__pycache__/
+*__pycache__/
 *.py[codz]
 *$py.class
 

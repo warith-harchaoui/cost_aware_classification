@@ -21,6 +21,10 @@ Frank–Wolfe on the simplex, but **we do not differentiate through the solver**
 
 See ``docs/math.md`` for a concise derivation and interpretation.
 
+Author
+------
+Warith Harchaoui <wharchaoui@nexton-group.com>
+
 Usage
 -----
 >>> import torch
