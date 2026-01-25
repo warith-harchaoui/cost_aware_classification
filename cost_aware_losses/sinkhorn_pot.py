@@ -109,7 +109,11 @@ def _pot_sinkhorn_plan(
     Returns
     -------
     torch.Tensor
-        Transport plans of shape ``(B, K, K)`` on same device/dtype as ``p``.
+        Transport plans of shape ``(B, K, K)``.
+    torch.Tensor
+        Dual potentials f = eps*log(u) of shape ``(B, K)``.
+    torch.Tensor
+        Dual potentials g = eps*log(v) of shape ``(B, K)``.
     """
     # -------------------------
     # Validate p, q shapes
@@ -149,11 +153,12 @@ def _pot_sinkhorn_plan(
         raise ValueError(f"eps must be scalar or (B,), got shape {eps.shape}.")
 
     # -------------------------
-    # Allocate output P (B, K, K), u (B, K), v (B, K)
+    # Allocate output P (B, K, K), f (B, K), g (B, K)
+    # f, g are dual potentials: f = eps * log(u), g = eps * log(v)
     # -------------------------
     P = torch.empty((B, K, K), device=device, dtype=dtype)
-    u = torch.empty((B, K), device=device, dtype=dtype)
-    v = torch.empty((B, K), device=device, dtype=dtype)
+    f = torch.empty((B, K), device=device, dtype=dtype)
+    g = torch.empty((B, K), device=device, dtype=dtype)
 
     # -------------------------
     # Solve per example (POT sinkhorn is 2D per call)
@@ -188,28 +193,61 @@ def _pot_sinkhorn_plan(
             else:
                 P[i] = torch.as_tensor(P_i, device=device, dtype=dtype)
                 
-            # Extract u, v
-            # POT returns them in log_dict['u'], log_dict['v']
-            # They might be numpy arrays or tensors
-            if "u" in log_dict and "v" in log_dict:
+            # Extract f, g (dual potentials)
+            # method='sinkhorn_log' usually returns 'log_u', 'log_v' or 'alpha', 'beta'.
+            # If 'log_u' present: f = eps * log_u. 
+            # If 'alpha' present: f = alpha.
+            # If only 'u' present: f = eps * log(u).
+            
+            # Prioritize log domain values
+            if "log_u" in log_dict and "log_v" in log_dict:
+                 log_u = log_dict["log_u"]
+                 log_v = log_dict["log_v"]
+                 # Convert to tensor
+                 if isinstance(log_u, torch.Tensor):
+                     log_u = log_u.to(device=device, dtype=dtype)
+                 else:
+                     log_u = torch.as_tensor(log_u, device=device, dtype=dtype)
+                 if isinstance(log_v, torch.Tensor):
+                     log_v = log_v.to(device=device, dtype=dtype)
+                 else:
+                     log_v = torch.as_tensor(log_v, device=device, dtype=dtype)
+                 f[i] = reg_i * log_u
+                 g[i] = reg_i * log_v
+            
+            elif "alpha" in log_dict and "beta" in log_dict:
+                 # Standard duals in some versions?
+                 alpha = log_dict["alpha"]
+                 beta = log_dict["beta"]
+                 if isinstance(alpha, torch.Tensor):
+                     f[i] = alpha.to(device=device, dtype=dtype)
+                 else:
+                     f[i] = torch.as_tensor(alpha, device=device, dtype=dtype)
+                 if isinstance(beta, torch.Tensor):
+                     g[i] = beta.to(device=device, dtype=dtype)
+                 else:
+                     g[i] = torch.as_tensor(beta, device=device, dtype=dtype)
+
+            elif "u" in log_dict and "v" in log_dict:
+                # Fallback to u, v
                 u_i_raw = log_dict["u"]
                 v_i_raw = log_dict["v"]
-                
                 if isinstance(u_i_raw, torch.Tensor):
-                    u[i] = u_i_raw.to(device=device, dtype=dtype)
+                    u_i = u_i_raw.to(device=device, dtype=dtype)
                 else:
-                    u[i] = torch.as_tensor(u_i_raw, device=device, dtype=dtype)
-                    
+                    u_i = torch.as_tensor(u_i_raw, device=device, dtype=dtype)
                 if isinstance(v_i_raw, torch.Tensor):
-                    v[i] = v_i_raw.to(device=device, dtype=dtype)
+                    v_i = v_i_raw.to(device=device, dtype=dtype)
                 else:
-                    v[i] = torch.as_tensor(v_i_raw, device=device, dtype=dtype)
+                    v_i = torch.as_tensor(v_i_raw, device=device, dtype=dtype)
+                
+                # f = eps * log(u)
+                f[i] = reg_i * torch.log(u_i + 1e-16)
+                g[i] = reg_i * torch.log(v_i + 1e-16)
             else:
-                # Fallback if u/v missing (e.g. some solvers don't return them?)
-                # This makes gradients 0 but avoids crash
-                logger.warning(f"POT sinkhorn log missing u/v for batch {i}. Gradients will be partial.")
-                u[i].fill_(1.0)
-                v[i].fill_(1.0)
+                logger.warning(f"POT sinkhorn log missing potentials for batch {i}. Gradients partial.")
+                f[i].fill_(0.0)
+                g[i].fill_(0.0)
 
         except Exception as e:
             msg = (
@@ -246,14 +284,25 @@ def _pot_sinkhorn_plan(
 
             P[i] = torch.from_numpy(P_i_np).to(device=device, dtype=dtype)
             
-            if "u" in log_dict_np and "v" in log_dict_np:
-                u[i] = torch.from_numpy(log_dict_np["u"]).to(device=device, dtype=dtype)
-                v[i] = torch.from_numpy(log_dict_np["v"]).to(device=device, dtype=dtype)
+            # Extract potentials from numpy log
+            if "log_u" in log_dict_np and "log_v" in log_dict_np:
+                 f[i] = reg_i * torch.from_numpy(log_dict_np["log_u"]).to(device=device, dtype=dtype)
+                 g[i] = reg_i * torch.from_numpy(log_dict_np["log_v"]).to(device=device, dtype=dtype)
+            elif "alpha" in log_dict_np and "beta" in log_dict_np:
+                 f[i] = torch.from_numpy(log_dict_np["alpha"]).to(device=device, dtype=dtype)
+                 g[i] = torch.from_numpy(log_dict_np["beta"]).to(device=device, dtype=dtype)
+            elif "u" in log_dict_np and "v" in log_dict_np:
+                 u_np = log_dict_np["u"]
+                 v_np = log_dict_np["v"]
+                 f_np = reg_np * np.log(u_np + 1e-16)
+                 g_np = reg_np * np.log(v_np + 1e-16)
+                 f[i] = torch.from_numpy(f_np).to(device=device, dtype=dtype)
+                 g[i] = torch.from_numpy(g_np).to(device=device, dtype=dtype)
             else:
-                u[i].fill_(1.0)
-                v[i].fill_(1.0)
+                 f[i].fill_(0.0)
+                 g[i].fill_(0.0)
 
-    return P, u, v
+    return P, f, g
 
 
 def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tensor) -> Tensor:
@@ -418,13 +467,13 @@ class SinkhornPOTLoss(CostAwareLoss):
         # Solve for P* without tracking gradients
         # -------------------------
         # -------------------------
-        # Solve for P* without tracking gradients
+        # Solve for P* and potentials f, g
         # -------------------------
         with torch.no_grad():
-            P, u, v = _pot_sinkhorn_plan(
+            P, f, g = _pot_sinkhorn_plan(
                 p=p.detach(),
                 q=q,  # no grad anyway
-                C=Cb_full.detach(),  # allow shared or batched inside, but we pass batched now
+                C=Cb_full.detach(),
                 eps=eps.detach(),
                 max_iter=self.max_iter,
                 stopThr=self.stopThr,
@@ -441,21 +490,25 @@ class SinkhornPOTLoss(CostAwareLoss):
         # -------------------------
         # Gradient Grafting
         # -------------------------
-        # The envelope theorem on the Primal (KL form) with fixed P yields a constant gradient (-eps).
-        # We need the gradient from the Dual formulation => f = eps * log(u).
+        # Correct gradient w.r.t p is: f - eps * (1 + log(p))
+        # Or simply: f - eps * log(p)   (constants vanish for softmax)
         #
-        # Graft: loss = primal_val (value) + f.detach() * p (gradient)
-        # We subtract (f.detach() * p.detach()) to keep the forward value == primal_val.
+        # We implement this by adding term: (f * p).sum() - eps * (p * log(p)).sum()
+        # The sum(p * log(p)) term ensures we pick up the -eps*(1+log p) gradient.
         
         tiny = 1e-16
-        eps_b = eps.view(-1, 1) if eps.ndim == 1 else eps
-        f = eps_b * torch.log(u + tiny)
+        grad_term_f = (f.detach() * p).sum(dim=1)
         
-        # Sum over K (dim=1) then simple sum over batch is implicit in external reduction?
-        # The method returns a vector of shape (B,).
+        # Entropy term for correction
+        # H_part = sum(p log p)
+        # We subtract eps * H_part.
+        # Gradient is -eps * (1 + log p). Correct.
+        eps_b = eps.view(-1) if eps.ndim == 1 else eps
+        entropy_part = (p * torch.log(p + tiny)).sum(dim=1)
+        correction_term = - eps_b * entropy_part
+
+        # Combined graft
+        graft = grad_term_f + correction_term
         
-        # Term (f * p).sum(dim=1) has shape (B,).
-        grad_term = (f.detach() * p).sum(dim=1)
-        correction = (f.detach() * p.detach()).sum(dim=1)
-        
-        return primal_val.detach() + grad_term - correction
+        # Identity subtraction to detach value
+        return primal_val.detach() + graft - graft.detach()

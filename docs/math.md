@@ -273,8 +273,8 @@ where $M_{i,j} = \exp(-(f_i + f_j + C_{i,j})/\varepsilon)$.
 |------|----------|----------------|--------|-----------|----------|
 | `SinkhornEnvelopeLoss` | Envelope | Custom | Low | High | Memory-constrained |
 | `SinkhornFullAutodiffLoss` | Full | Custom | High | Medium | Research comparison |
-| `SinkhornPOTLoss` | Envelope | POT library | Low | **Highest** | **Production** ⭐ |
-| `SinkhornFenchelYoungLoss` | Implicit FY | Custom FW | Low | High | Research, theory |
+| `SinkhornPOTLoss` | Envelope | POT library | Low | High | Production |
+| `SinkhornFenchelYoungLoss` |  Fenchel–Young Dual | Custom  | Low | High | Research, Theory |
 
 ---
 
@@ -297,7 +297,7 @@ All implementations include:
 | Scenario | Recommendation |
 |----------|----------------|
 | **Default/Unknown** | `epsilon_mode="offdiag_mean"` |
-| **Outlier costs** | `epsilon_mode="offdiag_median"` |
+| **Outlier-resistant costs** | `epsilon_mode="offdiag_median"` |
 | **Conservative** | `epsilon_mode="offdiag_max"` |
 | **Underfitting** | Decrease `epsilon_scale` (e.g., 0.5) |
 | **Overfitting** | Increase `epsilon_scale` (e.g., 2.0) |

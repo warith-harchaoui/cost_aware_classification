@@ -39,5 +39,5 @@ Should match POT results closely.
 ## How to Reproduce
 Run the full benchmark with temporal split (approx. several hours on CPU):
 ```bash
-python -m examples.fraud_detection --loss all --epochs 15 --epsilon-scale 2.0 --run-id all_temporal --device cpu
+python -m examples.fraud_detection --loss all --epochs 15 --epsilon-scale 2.0 --run-id all_temporal_v2 --device cpu
 ```

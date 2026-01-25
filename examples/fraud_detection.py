@@ -78,6 +78,7 @@ from examples.utils import (
     get_device,
     plot_metric_trajectory,
     plot_precision_recall_curve,
+    plot_temporal_split,
     setup_logging,
     training_state_from_dict,
     training_state_to_dict,
@@ -243,11 +244,26 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
     # But let's be safe and subtract min entry.
     opt_realized = torch.minimum(cost_approve_all, cost_decline_all).mean().item()
 
+    # PR-AUC for the batch (if both classes present)
+    # y is not passed to this function? It is.
+    # Check if we have both classes
+    if y.float().std() == 0:
+        batch_pr_auc = float("nan")
+    else:
+        # sklearn avg precision needs cpu numpy
+        batch_pr_auc = average_precision_score(
+            y.detach().cpu().numpy(), 
+            prob_fraud.detach().cpu().numpy()
+        )
+
     return {
         "train_expected_opt_regret": mean_exp_opt,
         "train_realized_regret": float(realized.mean().item()),
-        "train_naive_expected_regret": naive_exp_cost - mean_exp_opt,
-        "train_naive_realized_regret": naive_realized_cost - opt_realized,
+        "train_pr_auc": float(batch_pr_auc),
+        "train_naive_approve_expected_regret": mean_exp_approve,
+        "train_naive_decline_expected_regret": mean_exp_decline,
+        "train_naive_approve_realized_regret": float(cost_approve_all.mean().item()),
+        "train_naive_decline_realized_regret": float(cost_decline_all.mean().item()),
     }
 
 
@@ -263,11 +279,19 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
     p_fraud: List[float] = []
     realized_regrets: List[float] = []
     expected_opt_regrets: List[float] = []
+    
+    # Accumulators for naive baselines
+    total_naive_approve_realized = 0.0
+    total_naive_decline_realized = 0.0
+    total_naive_approve_expected = 0.0
+    total_naive_decline_expected = 0.0
+    total_samples = 0
 
     for x, y, C, _w in loader:
         x = x.to(device)
         y = y.to(device)
         C = C.to(device)
+        B = x.size(0)
 
         scores = model(x)
         prob_fraud = torch.softmax(scores, dim=1)[:, 1]
@@ -276,27 +300,52 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
         y_true.extend(y.detach().cpu().numpy().tolist())
         p_fraud.extend(prob_fraud.detach().cpu().numpy().tolist())
 
-        # Expected cost for each action over the predicted label distribution
+        # Expected cost for each action
         exp_approve = prob_fraud * C[:, 1, 0] + prob_legit * C[:, 0, 0]
         exp_decline = prob_fraud * C[:, 1, 1] + prob_legit * C[:, 0, 1]
         
         exp_opt = torch.minimum(exp_approve, exp_decline)
         action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
 
-        realized = C[torch.arange(C.shape[0], device=device), y, action]
+        realized = C[torch.arange(B, device=device), y, action]
 
         realized_regrets.extend(realized.detach().cpu().numpy().tolist())
         expected_opt_regrets.extend(exp_opt.detach().cpu().numpy().tolist())
+        
+        # Naive accumulation
+        # Realized
+        c_app = C[torch.arange(B, device=device), y, 0]
+        c_dec = C[torch.arange(B, device=device), y, 1]
+        
+        total_naive_approve_realized += float(c_app.sum().item())
+        total_naive_decline_realized += float(c_dec.sum().item())
+        total_naive_approve_expected += float(exp_approve.sum().item())
+        total_naive_decline_expected += float(exp_decline.sum().item())
+        total_samples += B
 
     y_arr = np.asarray(y_true, dtype=int)
     p_arr = np.asarray(p_fraud, dtype=float)
 
     pr_auc = float(average_precision_score(y_arr, p_arr))
+    
+    # Averages
+    if total_samples > 0:
+        naive_app_real = total_naive_approve_realized / total_samples
+        naive_dec_real = total_naive_decline_realized / total_samples
+        naive_app_exp = total_naive_approve_expected / total_samples
+        naive_dec_exp = total_naive_decline_expected / total_samples
+    else:
+        naive_app_real = naive_dec_real = naive_app_exp = naive_dec_exp = float("nan")
 
     return {
         "pr_auc": pr_auc,
         "realized_regret": float(np.mean(realized_regrets)) if realized_regrets else float("nan"),
         "expected_opt_regret": float(np.mean(expected_opt_regrets)) if expected_opt_regrets else float("nan"),
+        
+        "naive_approve_realized_cost": naive_app_real,
+        "naive_decline_realized_cost": naive_dec_real,
+        "naive_approve_expected_cost": naive_app_exp,
+        "naive_decline_expected_cost": naive_dec_exp,
     }
 
 
@@ -792,6 +841,17 @@ def train_one(
 
         # Train EMA plots
         if "train_expected_opt_regret" in state.train_ema:
+            # Baseline is best constant strategy (min of approve-all vs decline-all EMAs)
+            naive_base = None
+            if "train_naive_approve_expected_regret" in state.train_ema and \
+               "train_naive_decline_expected_regret" in state.train_ema:
+                
+                base_app = np.array(state.train_ema["train_naive_approve_expected_regret"])
+                base_dec = np.array(state.train_ema["train_naive_decline_expected_regret"])
+                # Truncate to min length if needed (though usually same)
+                min_len = min(len(base_app), len(base_dec))
+                naive_base = np.minimum(base_app[:min_len], base_dec[:min_len])
+
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
                 values=state.train_ema["train_expected_opt_regret"],
@@ -799,10 +859,19 @@ def train_one(
                 title=f"{loss_name} — Train expected optimal regret (EMA)",
                 ylabel="€ regret (expected, optimal action)",
                 epoch_iters=state.epoch_iters,
-                baseline_values=state.train_ema.get("train_naive_expected_regret"),
-                baseline_label="Naive",
+                baseline_values=naive_base,
+                baseline_label="Naive (Best Constant)",
             )
         if "train_realized_regret" in state.train_ema:
+            naive_base_real = None
+            if "train_naive_approve_realized_regret" in state.train_ema and \
+               "train_naive_decline_realized_regret" in state.train_ema:
+                
+                base_app = np.array(state.train_ema["train_naive_approve_realized_regret"])
+                base_dec = np.array(state.train_ema["train_naive_decline_realized_regret"])
+                min_len = min(len(base_app), len(base_dec))
+                naive_base_real = np.minimum(base_app[:min_len], base_dec[:min_len])
+
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
                 values=state.train_ema["train_realized_regret"],
@@ -810,8 +879,19 @@ def train_one(
                 title=f"{loss_name} — Train realized regret (EMA)",
                 ylabel="€ regret (realized)",
                 epoch_iters=state.epoch_iters,
-                baseline_values=state.train_ema.get("train_naive_realized_regret"),
-                baseline_label="Naive",
+                baseline_values=naive_base_real,
+                baseline_label="Naive (Best Constant)",
+            )
+            
+        if "train_pr_auc" in state.train_ema:
+            plot_metric_trajectory(
+                iters=state.train_ema_iters,
+                values=state.train_ema["train_pr_auc"],
+                out_path=run_dir / "train_pr_auc_ema.png",
+                title=f"{loss_name} — Train PR-AUC (EMA)",
+                ylabel="PR-AUC",
+                epoch_iters=state.epoch_iters,
+                y_quantile_max=None,
             )
 
         # Probe plots
@@ -827,6 +907,15 @@ def train_one(
                     y_quantile_max=None,
                 )
             if "expected_opt_regret" in state.probe_points:
+                # Baseline: Best Constant Strategy (Cost)
+                naive_base_probe = None
+                if "naive_approve_expected_cost" in state.probe_points and \
+                   "naive_decline_expected_cost" in state.probe_points:
+                    app = np.array(state.probe_points["naive_approve_expected_cost"])
+                    dec = np.array(state.probe_points["naive_decline_expected_cost"])
+                    min_len = min(len(app), len(dec))
+                    naive_base_probe = np.minimum(app[:min_len], dec[:min_len])
+
                 plot_metric_trajectory(
                     iters=state.probe_iters,
                     values=state.probe_points["expected_opt_regret"],
@@ -834,8 +923,19 @@ def train_one(
                     title=f"{loss_name} — Probe expected optimal regret vs iteration",
                     ylabel="€ regret (expected, optimal action)",
                     epoch_iters=state.epoch_iters,
+                    baseline_values=naive_base_probe,
+                    baseline_label="Naive (Best Constant)",
                 )
             if "realized_regret" in state.probe_points:
+                # Baseline: Best Constant Strategy (Cost)
+                naive_base_real_probe = None
+                if "naive_approve_realized_cost" in state.probe_points and \
+                   "naive_decline_realized_cost" in state.probe_points:
+                    app = np.array(state.probe_points["naive_approve_realized_cost"])
+                    dec = np.array(state.probe_points["naive_decline_realized_cost"])
+                    min_len = min(len(app), len(dec))
+                    naive_base_real_probe = np.minimum(app[:min_len], dec[:min_len])
+
                 plot_metric_trajectory(
                     iters=state.probe_iters,
                     values=state.probe_points["realized_regret"],
@@ -843,6 +943,8 @@ def train_one(
                     title=f"{loss_name} — Probe realized regret vs iteration",
                     ylabel="€ regret (realized)",
                     epoch_iters=state.epoch_iters,
+                    baseline_values=naive_base_real_probe,
+                    baseline_label="Naive (Best Constant)",
                 )
 
         # PR curve on full validation
@@ -851,7 +953,7 @@ def train_one(
         plot_precision_recall_curve(
             precision=prec,
             recall=rec,
-            out_path=run_dir / "precision_recall_curve.png",
+            out_path=run_dir / "val_precision_recall_curve.png",
             title=f"{loss_name} — Validation Precision–Recall (Epoch {epoch+1})",
             average_precision=pr_auc,
             prevalence=val_prevalence,
@@ -1067,6 +1169,13 @@ def main() -> None:
     
     # train_test_split removed in favor of temporal split
     logging.info("Temporal Split: train=%d, val=%d (split_idx=%d)", len(train_df), len(val_df), split_idx)
+
+    # Visualize temporal split
+    plot_temporal_split(
+        train_df["TransactionDT"].values,
+        val_df["TransactionDT"].values,
+        out_root / "temporal_split.png"
+    )
 
     train_df2, val_df2, feature_cols = make_features(train_df, val_df)
 

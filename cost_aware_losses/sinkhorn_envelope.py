@@ -244,7 +244,15 @@ class SinkhornEnvelopeLoss(CostAwareLoss):
         eps_b = eps.view(-1, 1) if eps.ndim == 1 else eps
         f = eps_b * torch.log(u + tiny)
         
-        grad_term = (f.detach() * p).sum(dim=1)
-        correction = (f.detach() * p.detach()).sum(dim=1)
+        grad_term_f = (f.detach() * p).sum(dim=1)
         
-        return primal_val.detach() + grad_term - correction
+        # Entropy term for correction (matches the missing -eps*log(p) gradient)
+        # Gradient of -eps * sum(p log p) is -eps * (1+log p).
+        eps_b = eps.view(-1) if eps.ndim == 1 else eps
+        entropy_part = (p * torch.log(p + tiny)).sum(dim=1)
+        correction_term = - eps_b * entropy_part
+
+        # Combined graft
+        graft = grad_term_f + correction_term
+        
+        return primal_val.detach() + graft - graft.detach()

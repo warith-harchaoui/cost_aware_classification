@@ -532,6 +532,37 @@ Compare results by examining:
 3. **Training curves**: Which loss converges fastest/most stably?
 4. **Computation time**: Which loss is most efficient?
 
+## 🧪 Tests
+
+To ensure the reliability and mathematical correctness of the custom Sinkhorn loss implementations, we provide a comprehensive test suite.
+
+### 1. Installation for Testing
+Tests require the package to be installed in **editable mode** so that `cost_aware_losses` is importable by `pytest`:
+
+```bash
+pip install -e .
+```
+
+### 2. Running Tests
+
+Run the full suite with:
+
+```bash
+pytest tests
+```
+
+### 3. Test Categories
+
+- **Consistency Tests** (`tests/test_sinkhorn_consistency.py`):
+  - Verifies that different implementations (`SinkhornPOTLoss`, `SinkhornEnvelopeLoss`, `SinkhornFullAutodiffLoss`) output consistent loss values for the same inputs.
+  - Checks that gradients match across implementations (e.g., confirming that the envelope gradient graft matches the autodiff gradient).
+
+- **Advanced Verification** (`tests/test_sinkhorn_advanced.py`):
+  - **`test_gradcheck`**: Uses `torch.autograd.gradcheck` (finite differences) to mathematically prove the correctness of our custom backward passes. This is critical for confirming the "Gradient Grafting" technique used in `SinkhornPOTLoss` and `SinkhornEnvelopeLoss` (fixing the zero-gradient issue of standard envelope theorems on discrete measures).
+  - **`test_epsilon_limit_convergence`**: Verifies that as entropic regularization $\varepsilon \to 0$, the Sinkhorn loss converges to the exact Optimal Transport cost (Earth Mover's Distance).
+  - **`test_extreme_costs`**: Checks numerical stability with very large cost values (e.g., $10^5$), ensuring no `NaN` or `Inf` outputs.
+  - **`test_cost_shift_invariance`**: Verifies theoretical properties, such as the loss increasing by exactly $k$ when a constant $k$ is added to the cost matrix, while gradients remain invariant.
+
 ## 📜 License
 
 **Unlicense** — This is free and unencumbered software released into the public domain.  

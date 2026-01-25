@@ -313,3 +313,43 @@ def plot_precision_recall_curve(
     plt.tight_layout()
     plt.savefig(out_path)
     plt.close()
+
+def plot_temporal_split(
+    train_dt: np.ndarray,
+    val_dt: np.ndarray,
+    out_path: PathLike,
+) -> None:
+    """
+    Plot the distribution of TransactionDT for training and validation splits.
+    
+    Parameters
+    ----------
+    train_dt:
+        TransactionDT values for training set.
+    val_dt:
+        TransactionDT values for validation set.
+    out_path:
+        Destination PNG path.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    plt.figure(figsize=(10, 5))
+    
+    # Plot histograms
+    plt.hist(train_dt, bins=50, alpha=0.7, label="Train", color="blue")
+    plt.hist(val_dt, bins=50, alpha=0.7, label="Validation", color="orange")
+    
+    plt.title("Temporal Split (TransactionDT)")
+    plt.xlabel("TransactionDT")
+    plt.ylabel("Frequency")
+    plt.legend(loc="upper right")
+    plt.grid(True, alpha=0.3)
+    
+    ax = plt.gca()
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
