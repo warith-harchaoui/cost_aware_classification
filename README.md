@@ -471,13 +471,15 @@ Each run creates a directory `fraud_output/<run-id>/<loss_name>/` with:
 checkpoint_last.pt          # Latest checkpoint (for resuming)
 checkpoint_best.pt          # Best checkpoint (by PR-AUC)
 train_ema_metrics.csv       # Training metrics (EMA smoothed)
-probe_metrics.csv           # Validation metrics over time
-precision_recall_curve.png  # PR curve visualization
-probe_pr_auc.png           # PR-AUC vs iteration
-probe_expected_opt_regret.png      # Expected optimal regret
-probe_realized_regret.png          # Realized regret
-train_expected_opt_regret_ema.png  # Training regret (EMA)
-train_realized_regret_ema.png      # Training realized regret
+val_metrics.csv               # Validation metrics over time
+val_precision_recall_curve.png  # PR curve visualization
+val_pr_auc.png                  # PR-AUC vs iteration
+val_expected_opt_regret.png     # Expected optimal regret
+val_realized_regret.png         # Realized regret
+train_expected_opt_regret.png   # Training regret (EMA smoothed)
+train_realized_regret.png       # Training realized regret
+train_pr_auc.png                # Training PR-AUC (EMA smoothed)
+train_precision_recall_curve.png # Training PR curve
 ```
 
 ### Metrics Explained

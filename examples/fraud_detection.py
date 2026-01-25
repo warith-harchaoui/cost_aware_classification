@@ -260,8 +260,10 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
         "train_expected_opt_regret": mean_exp_opt,
         "train_realized_regret": float(realized.mean().item()),
         "train_pr_auc": float(batch_pr_auc),
-        "train_naive_approve_expected_regret": mean_exp_approve,
-        "train_naive_decline_expected_regret": mean_exp_decline,
+        # Naive baselines should not depend on model probabilities (which creates correlation).
+        # The best estimator for the "Expected Cost" of a fixed strategy is just its Average Realized Cost.
+        "train_naive_approve_expected_regret": float(cost_approve_all.mean().item()),
+        "train_naive_decline_expected_regret": float(cost_decline_all.mean().item()),
         "train_naive_approve_realized_regret": float(cost_approve_all.mean().item()),
         "train_naive_decline_realized_regret": float(cost_decline_all.mean().item()),
     }
@@ -319,8 +321,12 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
         
         total_naive_approve_realized += float(c_app.sum().item())
         total_naive_decline_realized += float(c_dec.sum().item())
-        total_naive_approve_expected += float(exp_approve.sum().item())
-        total_naive_decline_expected += float(exp_decline.sum().item())
+        
+        # For "Expected" naive cost, we also use the Realized sum as the unbiased estimator.
+        # This prevents the baseline from drifting with the model's probabilities.
+        total_naive_approve_expected += float(c_app.sum().item())
+        total_naive_decline_expected += float(c_dec.sum().item())
+        
         total_samples += B
 
     y_arr = np.asarray(y_true, dtype=int)
@@ -841,17 +847,15 @@ def train_one(
 
         # Train EMA plots
         if "train_expected_opt_regret" in state.train_ema:
-            # Baselines: Approve All vs Decline All (Best Constant is visually inferred or can be plotted if needed, but user requested 2 curves)
+            # Baseline: Only Approve All (as requested by user)
             baselines = {}
             if "train_naive_approve_expected_regret" in state.train_ema:
                 baselines["Naive (Approve)"] = state.train_ema["train_naive_approve_expected_regret"]
-            if "train_naive_decline_expected_regret" in state.train_ema:
-                baselines["Naive (Decline)"] = state.train_ema["train_naive_decline_expected_regret"]
 
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
                 values=state.train_ema["train_expected_opt_regret"],
-                out_path=run_dir / "train_expected_opt_regret_ema.png",
+                out_path=run_dir / "train_expected_opt_regret.png",
                 title=f"{loss_name} — Train expected optimal regret (EMA)",
                 ylabel="€ regret (expected, optimal action)",
                 epoch_iters=state.epoch_iters,
@@ -861,13 +865,11 @@ def train_one(
             baselines_real = {}
             if "train_naive_approve_realized_regret" in state.train_ema:
                 baselines_real["Naive (Approve)"] = state.train_ema["train_naive_approve_realized_regret"]
-            if "train_naive_decline_realized_regret" in state.train_ema:
-                baselines_real["Naive (Decline)"] = state.train_ema["train_naive_decline_realized_regret"]
 
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
                 values=state.train_ema["train_realized_regret"],
-                out_path=run_dir / "train_realized_regret_ema.png",
+                out_path=run_dir / "train_realized_regret.png",
                 title=f"{loss_name} — Train realized regret (EMA)",
                 ylabel="€ regret (realized)",
                 epoch_iters=state.epoch_iters,
@@ -875,19 +877,34 @@ def train_one(
             )
             
         if "train_pr_auc" in state.train_ema:
+            # Baselines for PR-AUC: 
+            # Naive (Decline) = prevalence
+            # Naive (Approve) = 0
+            n_iters = len(state.train_ema_iters)
+            baselines_pr = {
+                "Naive (Decline)": [train_prevalence] * n_iters,
+                "Naive (Approve)": [0.0] * n_iters,
+            }
+
             plot_metric_trajectory(
                 iters=state.train_ema_iters,
                 values=state.train_ema["train_pr_auc"],
-                out_path=run_dir / "train_pr_auc_ema.png",
+                out_path=run_dir / "train_pr_auc.png",
                 title=f"{loss_name} — Train PR-AUC (EMA)",
                 ylabel="PR-AUC",
                 epoch_iters=state.epoch_iters,
+                baselines=baselines_pr,
                 y_quantile_max=None,
             )
 
         # Validation (Subset) plots
         if state.val_iters:
             if "pr_auc" in state.val_points:
+                n_v_iters = len(state.val_iters)
+                baselines_val_pr = {
+                    "Naive (Decline)": [val_prevalence] * n_v_iters,
+                    "Naive (Approve)": [0.0] * n_v_iters,
+                }
                 plot_metric_trajectory(
                     iters=state.val_iters,
                     values=state.val_points["pr_auc"],
@@ -895,15 +912,14 @@ def train_one(
                     title=f"{loss_name} — Validation PR-AUC vs iteration",
                     ylabel="PR-AUC",
                     epoch_iters=state.epoch_iters,
+                    baselines=baselines_val_pr,
                     y_quantile_max=None,
                 )
             if "expected_opt_regret" in state.val_points:
-                # Baseline: Naive Approve / Decline
+                # Baseline: Only Approve All
                 baselines_val = {}
                 if "naive_approve_expected_cost" in state.val_points:
                     baselines_val["Naive (Approve)"] = state.val_points["naive_approve_expected_cost"]
-                if "naive_decline_expected_cost" in state.val_points:
-                    baselines_val["Naive (Decline)"] = state.val_points["naive_decline_expected_cost"]
 
                 plot_metric_trajectory(
                     iters=state.val_iters,
@@ -915,12 +931,10 @@ def train_one(
                     baselines=baselines_val,
                 )
             if "realized_regret" in state.val_points:
-                # Baseline: Naive Approve / Decline
+                # Baseline: Only Approve All
                 baselines_val_real = {}
                 if "naive_approve_realized_cost" in state.val_points:
                     baselines_val_real["Naive (Approve)"] = state.val_points["naive_approve_realized_cost"]
-                if "naive_decline_realized_cost" in state.val_points:
-                    baselines_val_real["Naive (Decline)"] = state.val_points["naive_decline_realized_cost"]
 
                 plot_metric_trajectory(
                     iters=state.val_iters,
@@ -1080,9 +1094,9 @@ def main() -> None:
                        help="Ending multiplier for epsilon schedule (default: 0.1)")
 
     # Iteration-based evaluation / smoothing
-    parser.add_argument("--eval-every", type=int, default=500, help="Probe eval period in iterations (0 disables)")
+    parser.add_argument("--eval-every", type=int, default=500, help="Validation eval period in iterations (0 disables)")
     parser.add_argument("--ema-alpha", type=float, default=0.05, help="EMA alpha for train-batch metrics")
-    parser.add_argument("--probe-size", type=int, default=20000, help="Probe size (subset of validation)")
+    parser.add_argument("--val-subset-size", type=int, default=20000, help="Validation subset size for iteration plots")
 
     # Checkpointing
     parser.add_argument("--checkpoint-every-iters", type=int, default=0, help="Save checkpoint every N iters (0 disables)")
@@ -1203,9 +1217,9 @@ def main() -> None:
     logging.info("Prevalence: train=%.4f, val=%.4f", train_prevalence, val_prevalence)
 
     # Fixed validation subset for iteration plots (deterministic)
-    probe_size = int(args.probe_size)
+    val_subset_size = int(args.val_subset_size)
     rng = np.random.default_rng(123)
-    idx = rng.choice(len(val_ds), size=min(probe_size, len(val_ds)), replace=False)
+    idx = rng.choice(len(val_ds), size=min(val_subset_size, len(val_ds)), replace=False)
     val_subset = torch.utils.data.Subset(val_ds, idx.tolist())
     val_loader_subset = DataLoader(val_subset, batch_size=int(args.batch_size), shuffle=False, num_workers=0)
     logging.info("Validation subset size: %d", len(val_subset))

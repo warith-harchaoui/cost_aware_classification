@@ -217,15 +217,23 @@ def plot_metric_trajectory(
     val = np.asarray(list(values), dtype=float)
 
     plt.figure(figsize=(12, 4.5))
-    plt.plot(it, val, linewidth=2, label="Model")
+    plt.plot(it, val, linewidth=2, color="#007AFF", label="Model")
 
     if baselines:
-        # Define some line styles/colors for baselines
-        styles = [("--", "gray"), (":", "red"), ("-.", "blue")]
-        for i, (label, b_vals) in enumerate(baselines.items()):
+        for label, b_vals in baselines.items():
             b_arr = np.asarray(list(b_vals), dtype=float)
             min_len = min(len(it), len(b_arr))
-            style, color = styles[i % len(styles)]
+            
+            # Map labels to specified colors
+            color = "gray"
+            style = "--"
+            if "Approve" in label:
+                color = "#28CD41"  # Green
+                style = "--"
+            elif "Decline" in label:
+                color = "#FF3B30"  # Red
+                style = "--"
+            
             plt.plot(it[:min_len], b_arr[:min_len], 
                      linestyle=style, color=color, alpha=0.7, label=label)
 
@@ -295,7 +303,7 @@ def plot_precision_recall_curve(
     average_precision:
         Optional Average Precision (AP) for annotation.
     prevalence:
-        Optional prevalence (positive rate) for "Luck" baseline.
+        Prevalence (positive rate) for Naive baselines.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,15 +311,17 @@ def plot_precision_recall_curve(
     plt.figure(figsize=(6, 5))
     
     label = f"AP={average_precision:.4f}" if average_precision is not None else None
-    plt.plot(recall, precision, linewidth=2, label=label, marker=".")
+    plt.plot(recall, precision, linewidth=2, color="#007AFF", label=label, marker=".")
 
     if prevalence is not None:
-        plt.axhline(prevalence, color="gray", linestyle="--", label=f"Luck ({prevalence:.4f})")
+        # Standardized colors: Naive (Approve) Green, Naive (Decline) Red
+        plt.axhline(prevalence, color="#FF3B30", linestyle="--", label=f"Naive (Decline) [{prevalence:.4f}]")
+        plt.axhline(0.0, color="#28CD41", linestyle="--", label="Naive (Approve) [0.0000]")
 
     plt.title(title)
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.ylim(0.0, 1.05)
+    plt.ylim(-0.05, 1.05)
     plt.xlim(0.0, 1.0)
     plt.legend(loc="best")
     plt.grid(True)
@@ -323,43 +333,125 @@ def plot_precision_recall_curve(
     plt.tight_layout()
     plt.savefig(out_path)
     plt.close()
-
 def plot_temporal_split(
     train_dt: np.ndarray,
     val_dt: np.ndarray,
     out_path: PathLike,
+    *,
+    bins: int = 60,
+    seconds_per_day: float = 86_400.0,
 ) -> None:
     """
-    Plot the distribution of TransactionDT for training and validation splits.
-    
+    Plot the distribution of `TransactionDT` for train/validation splits with a human-friendly x-axis.
+
+    The IEEE-CIS `TransactionDT` feature is typically a *relative* timestamp expressed in seconds since
+    an arbitrary reference point (the true calendar origin is not provided). Plotting raw seconds
+    yields an unreadable x-axis (e.g., values around 1e7). This helper converts seconds to
+    **days since the first observed transaction**, which makes temporal splits easier to inspect.
+
     Parameters
     ----------
     train_dt:
-        TransactionDT values for training set.
+        1D array of `TransactionDT` values for the training split (units: seconds).
     val_dt:
-        TransactionDT values for validation set.
+        1D array of `TransactionDT` values for the validation split (units: seconds).
     out_path:
-        Destination PNG path.
+        Destination path for the saved PNG figure.
+    bins:
+        Number of histogram bins to use (shared between train and validation).
+    seconds_per_day:
+        Conversion factor from seconds to days. Defaults to 86400.
+
+    Returns
+    -------
+    None
+        The function saves the figure to `out_path` and closes the Matplotlib figure.
+
+    Notes
+    -----
+    - This plot is meant to validate that the validation set occurs *after* the training set in time
+      (i.e., no temporal leakage).
+    - The histograms use the same bin edges to ensure a fair visual comparison.
     """
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    
+    # --- Defensive conversions & basic validation -----------------------------------------------
+    # Accept numpy arrays (or array-like) and ensure we work with flat float arrays.
+    train_dt_arr: np.ndarray = np.asarray(train_dt, dtype=np.float64).ravel()
+    val_dt_arr: np.ndarray = np.asarray(val_dt, dtype=np.float64).ravel()
+
+    if train_dt_arr.size == 0:
+        raise ValueError("`train_dt` is empty; cannot plot a temporal split.")
+    if val_dt_arr.size == 0:
+        raise ValueError("`val_dt` is empty; cannot plot a temporal split.")
+    if not np.isfinite(train_dt_arr).all():
+        raise ValueError("`train_dt` contains NaN or infinite values; please clean/filter first.")
+    if not np.isfinite(val_dt_arr).all():
+        raise ValueError("`val_dt` contains NaN or infinite values; please clean/filter first.")
+    if seconds_per_day <= 0:
+        raise ValueError("`seconds_per_day` must be strictly positive.")
+
+    # --- Convert seconds to a more interpretable unit (days) -----------------------------------
+    # We also shift time to start at day 0 for the earliest transaction across both splits.
+    # This makes the axis "days since first transaction", which is stable and readable.
+    all_dt_seconds: np.ndarray = np.concatenate([train_dt_arr, val_dt_arr])
+    t0_seconds: float = float(all_dt_seconds.min())
+
+    train_days: np.ndarray = (train_dt_arr - t0_seconds) / seconds_per_day
+    val_days: np.ndarray = (val_dt_arr - t0_seconds) / seconds_per_day
+
+    # --- Shared binning for fair histogram comparison ------------------------------------------
+    # Using shared bin edges ensures "Train" and "Validation" bars align.
+    all_days: np.ndarray = np.concatenate([train_days, val_days])
+    day_min: float = float(all_days.min())
+    day_max: float = float(all_days.max())
+
+    # In degenerate cases (all timestamps identical), slightly widen the range so hist() works.
+    if day_min == day_max:
+        day_min -= 0.5
+        day_max += 0.5
+
+    bin_edges: np.ndarray = np.linspace(day_min, day_max, int(bins) + 1)
+
+    # --- Create output directory ---------------------------------------------------------------
+    out_path_p = Path(out_path)
+    out_path_p.parent.mkdir(parents=True, exist_ok=True)
+
+    # --- Plot ------------------------------------------------------------------------------
     plt.figure(figsize=(10, 5))
-    
-    # Plot histograms
-    plt.hist(train_dt, bins=50, alpha=0.7, label="Train", color="blue")
-    plt.hist(val_dt, bins=50, alpha=0.7, label="Validation", color="orange")
-    
+
+    # Histogram for training days
+    plt.hist(
+        train_days,
+        bins=bin_edges,
+        alpha=0.7,
+        label="Train",
+    )
+
+    # Histogram for validation days
+    plt.hist(
+        val_days,
+        bins=bin_edges,
+        alpha=0.7,
+        label="Validation",
+    )
+
+    # A vertical line at the earliest validation timestamp is often a helpful split indicator.
+    # This is optional but usually improves interpretability.
+    val_start: float = float(val_days.min())
+    plt.axvline(val_start, linestyle="--", linewidth=1.5, alpha=0.8, label="Val start")
+
+    # Labels and cosmetics
     plt.title("Temporal Split (TransactionDT)")
-    plt.xlabel("TransactionDT")
+    plt.xlabel("Days since first transaction")
     plt.ylabel("Frequency")
     plt.legend(loc="upper right")
     plt.grid(True, alpha=0.3)
-    
+
     ax = plt.gca()
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    
+
     plt.tight_layout()
-    plt.savefig(out_path)
+
+    # Save and close to avoid memory leaks in long-running scripts / notebooks.
+    plt.savefig(out_path_p, dpi=150)
     plt.close()
