@@ -1,6 +1,8 @@
 # Some files
 *.zip
 *.pyc
+.DS_Store
+*/.DS_Store
 
 # Some folders
 ieee-fraud-detection/
@@ -217,36 +219,4 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Python cache
-cost_aware_losses/__pycache__/__init__.cpython-310.pyc
-cost_aware_losses/__pycache__/__init__.cpython-312.pyc
-cost_aware_losses/__pycache__/__init__.cpython-310.pyc
-cost_aware_losses/__pycache__/__init__.cpython-312.pyc
-cost_aware_losses/__pycache__/base.cpython-310.pyc
-cost_aware_losses/__pycache__/base.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_autodiff.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_autodiff.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_envelope.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_envelope.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_fenchel_young.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_fenchel_young.cpython-312.pyc
-examples/__pycache__/__init__.cpython-310.pyc
-examples/__pycache__/fraud_detection.cpython-310.pyc
-examples/__pycache__/tabular_models.cpython-310.pyc
-examples/__pycache__/utils.cpython-310.pyc
-.DS_Store
-cost_aware_losses/__pycache__/__init__.cpython-310.pyc
-cost_aware_losses/__pycache__/__init__.cpython-312.pyc
-cost_aware_losses/__pycache__/base.cpython-310.pyc
-cost_aware_losses/__pycache__/base.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_autodiff.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_autodiff.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_envelope.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_envelope.cpython-312.pyc
-cost_aware_losses/__pycache__/sinkhorn_fenchel_young.cpython-310.pyc
-cost_aware_losses/__pycache__/sinkhorn_fenchel_young.cpython-312.pyc
-examples/__pycache__/__init__.cpython-310.pyc
-examples/__pycache__/fraud_detection.cpython-310.pyc
-examples/__pycache__/tabular_models.cpython-310.pyc
-examples/__pycache__/utils.cpython-310.pyc
-cost_aware_losses/__pycache__/__init__.cpython-310.pyc
+
