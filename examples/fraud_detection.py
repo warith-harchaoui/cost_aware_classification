@@ -199,18 +199,28 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
         - train_expected_opt_regret
         - train_realized_regret
     """
-    prob = torch.softmax(scores, dim=1)[:, 1]  # P(fraud)
-    exp_approve = prob * C[:, 1, 0]
-    exp_decline = (1.0 - prob) * C[:, 0, 1]
+    # P(fraud) from model predictions
+    prob_fraud = torch.softmax(scores, dim=1)[:, 1]
+    prob_legit = 1.0 - prob_fraud
+    
+    # Expected cost for each action, properly accounting for both label outcomes:
+    # E[cost | action=approve] = P(fraud) * C[fraud, approve] + P(legit) * C[legit, approve]
+    # E[cost | action=decline] = P(fraud) * C[fraud, decline] + P(legit) * C[legit, decline]
+    exp_approve = prob_fraud * C[:, 1, 0] + prob_legit * C[:, 0, 0]
+    exp_decline = prob_fraud * C[:, 1, 1] + prob_legit * C[:, 0, 1]
 
+    # Optimal action minimizes expected cost
+    exp_opt = torch.minimum(exp_approve, exp_decline)
+    
+    # Realized cost: C[true_label, chosen_action]
     action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
     realized = C[torch.arange(C.shape[0], device=C.device), y, action]
-    exp_opt = torch.minimum(exp_approve, exp_decline)
 
     return {
         "train_expected_opt_regret": float(exp_opt.mean().item()),
         "train_realized_regret": float(realized.mean().item()),
     }
+
 
 
 @torch.no_grad()
@@ -231,17 +241,20 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
         C = C.to(device)
 
         scores = model(x)
-        prob = torch.softmax(scores, dim=1)[:, 1]
+        prob_fraud = torch.softmax(scores, dim=1)[:, 1]
+        prob_legit = 1.0 - prob_fraud
 
         y_true.extend(y.detach().cpu().numpy().tolist())
-        p_fraud.extend(prob.detach().cpu().numpy().tolist())
+        p_fraud.extend(prob_fraud.detach().cpu().numpy().tolist())
 
-        exp_approve = prob * C[:, 1, 0]
-        exp_decline = (1.0 - prob) * C[:, 0, 1]
+        # Expected cost for each action over the predicted label distribution
+        exp_approve = prob_fraud * C[:, 1, 0] + prob_legit * C[:, 0, 0]
+        exp_decline = prob_fraud * C[:, 1, 1] + prob_legit * C[:, 0, 1]
+        
+        exp_opt = torch.minimum(exp_approve, exp_decline)
         action = torch.where(exp_decline < exp_approve, torch.ones_like(y), torch.zeros_like(y)).long()
 
         realized = C[torch.arange(C.shape[0], device=device), y, action]
-        exp_opt = torch.minimum(exp_approve, exp_decline)
 
         realized_regrets.extend(realized.detach().cpu().numpy().tolist())
         expected_opt_regrets.extend(exp_opt.detach().cpu().numpy().tolist())

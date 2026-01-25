@@ -111,7 +111,7 @@ def _sinkhorn_plan(
         v = q / torch.clamp(KTu, min=tiny)
 
     P = u.unsqueeze(2) * Kmat * v.unsqueeze(1)
-    return P
+    return P, u, v
 
 
 def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tensor) -> Tensor:
@@ -231,9 +231,20 @@ class SinkhornEnvelopeLoss(CostAwareLoss):
             q = (1.0 - delta) * q + delta / float(K)
 
         # Solve Sinkhorn plan but do NOT differentiate through iterations.
+        # Solve Sinkhorn plan but do NOT differentiate through iterations.
         with torch.no_grad():
-            P = _sinkhorn_plan(p.detach(), q.detach(), Cb.detach(), eps.detach(), max_iter=self.max_iter)
+            P, u, v = _sinkhorn_plan(p.detach(), q.detach(), Cb.detach(), eps.detach(), max_iter=self.max_iter)
 
         # Envelope / implicit-ish gradient: keep explicit dependence on p,q via KL term.
         P = P.detach()
-        return _entropy_kl_objective(P, p, q, eps, Cb)
+        primal_val = _entropy_kl_objective(P, p, q, eps, Cb)
+        
+        # Graft dual gradient: f = eps * log(u)
+        tiny = 1e-16
+        eps_b = eps.view(-1, 1) if eps.ndim == 1 else eps
+        f = eps_b * torch.log(u + tiny)
+        
+        grad_term = (f.detach() * p).sum(dim=1)
+        correction = (f.detach() * p.detach()).sum(dim=1)
+        
+        return primal_val.detach() + grad_term - correction

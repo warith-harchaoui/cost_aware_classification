@@ -149,9 +149,11 @@ def _pot_sinkhorn_plan(
         raise ValueError(f"eps must be scalar or (B,), got shape {eps.shape}.")
 
     # -------------------------
-    # Allocate output (B, K, K)
+    # Allocate output P (B, K, K), u (B, K), v (B, K)
     # -------------------------
     P = torch.empty((B, K, K), device=device, dtype=dtype)
+    u = torch.empty((B, K), device=device, dtype=dtype)
+    v = torch.empty((B, K), device=device, dtype=dtype)
 
     # -------------------------
     # Solve per example (POT sinkhorn is 2D per call)
@@ -161,7 +163,8 @@ def _pot_sinkhorn_plan(
 
         # Fast path: torch backend (keeps GPU if tensors are CUDA)
         try:
-            P_i = ot.sinkhorn(
+            # We need the log dictionary to get u and v
+            out = ot.sinkhorn(
                 a=p[i],
                 b=q[i],
                 M=Cb[i],
@@ -169,13 +172,44 @@ def _pot_sinkhorn_plan(
                 numItermax=int(max_iter),
                 stopThr=float(stopThr),
                 method=method,
+                log=True,
             )
+            
+            # Unpack based on return type
+            if isinstance(out, tuple) and len(out) == 2:
+                P_i, log_dict = out
+            else:
+                # Should not happen with log=True, but safety fallback
+                P_i, log_dict = out, {}
 
             # POT might return numpy even if input torch (depends on backend dispatch).
             if isinstance(P_i, torch.Tensor):
                 P[i] = P_i.to(device=device, dtype=dtype)
             else:
                 P[i] = torch.as_tensor(P_i, device=device, dtype=dtype)
+                
+            # Extract u, v
+            # POT returns them in log_dict['u'], log_dict['v']
+            # They might be numpy arrays or tensors
+            if "u" in log_dict and "v" in log_dict:
+                u_i_raw = log_dict["u"]
+                v_i_raw = log_dict["v"]
+                
+                if isinstance(u_i_raw, torch.Tensor):
+                    u[i] = u_i_raw.to(device=device, dtype=dtype)
+                else:
+                    u[i] = torch.as_tensor(u_i_raw, device=device, dtype=dtype)
+                    
+                if isinstance(v_i_raw, torch.Tensor):
+                    v[i] = v_i_raw.to(device=device, dtype=dtype)
+                else:
+                    v[i] = torch.as_tensor(v_i_raw, device=device, dtype=dtype)
+            else:
+                # Fallback if u/v missing (e.g. some solvers don't return them?)
+                # This makes gradients 0 but avoids crash
+                logger.warning(f"POT sinkhorn log missing u/v for batch {i}. Gradients will be partial.")
+                u[i].fill_(1.0)
+                v[i].fill_(1.0)
 
         except Exception as e:
             msg = (
@@ -194,7 +228,7 @@ def _pot_sinkhorn_plan(
             C_i_np = Cb[i].detach().cpu().numpy()
             reg_np = float(reg_i.detach().cpu().item())
 
-            P_i_np = ot.sinkhorn(
+            out_np = ot.sinkhorn(
                 a=p_i_np,
                 b=q_i_np,
                 M=C_i_np,
@@ -202,10 +236,24 @@ def _pot_sinkhorn_plan(
                 numItermax=int(max_iter),
                 stopThr=float(stopThr),
                 method=method,
+                log=True,
             )
-            P[i] = torch.from_numpy(P_i_np).to(device=device, dtype=dtype)
+            
+            if isinstance(out_np, tuple) and len(out_np) == 2:
+                P_i_np, log_dict_np = out_np
+            else:
+                P_i_np, log_dict_np = out_np, {}
 
-    return P
+            P[i] = torch.from_numpy(P_i_np).to(device=device, dtype=dtype)
+            
+            if "u" in log_dict_np and "v" in log_dict_np:
+                u[i] = torch.from_numpy(log_dict_np["u"]).to(device=device, dtype=dtype)
+                v[i] = torch.from_numpy(log_dict_np["v"]).to(device=device, dtype=dtype)
+            else:
+                u[i].fill_(1.0)
+                v[i].fill_(1.0)
+
+    return P, u, v
 
 
 def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tensor) -> Tensor:
@@ -284,7 +332,7 @@ class SinkhornPOTLoss(CostAwareLoss):
         epsilon_scale: float = 1.0,
         epsilon_min: float = 1e-8,
         max_iter: int = 50,
-        stopThr: float = 1e-6,
+        stopThr: float = 1e-5,
         label_smoothing: float = 1e-3,
         method: Literal["sinkhorn", "sinkhorn_log"] = "sinkhorn_log",
         allow_numpy_fallback: bool = False,
@@ -369,8 +417,11 @@ class SinkhornPOTLoss(CostAwareLoss):
         # -------------------------
         # Solve for P* without tracking gradients
         # -------------------------
+        # -------------------------
+        # Solve for P* without tracking gradients
+        # -------------------------
         with torch.no_grad():
-            P = _pot_sinkhorn_plan(
+            P, u, v = _pot_sinkhorn_plan(
                 p=p.detach(),
                 q=q,  # no grad anyway
                 C=Cb_full.detach(),  # allow shared or batched inside, but we pass batched now
@@ -382,7 +433,29 @@ class SinkhornPOTLoss(CostAwareLoss):
             )
 
         # -------------------------
-        # Envelope gradient: treat P* as constant
+        # Helper: Primal value
         # -------------------------
         P = P.detach()
-        return _entropy_kl_objective(P, p, q, eps, Cb_full)
+        primal_val = _entropy_kl_objective(P, p, q, eps, Cb_full)
+
+        # -------------------------
+        # Gradient Grafting
+        # -------------------------
+        # The envelope theorem on the Primal (KL form) with fixed P yields a constant gradient (-eps).
+        # We need the gradient from the Dual formulation => f = eps * log(u).
+        #
+        # Graft: loss = primal_val (value) + f.detach() * p (gradient)
+        # We subtract (f.detach() * p.detach()) to keep the forward value == primal_val.
+        
+        tiny = 1e-16
+        eps_b = eps.view(-1, 1) if eps.ndim == 1 else eps
+        f = eps_b * torch.log(u + tiny)
+        
+        # Sum over K (dim=1) then simple sum over batch is implicit in external reduction?
+        # The method returns a vector of shape (B,).
+        
+        # Term (f * p).sum(dim=1) has shape (B,).
+        grad_term = (f.detach() * p).sum(dim=1)
+        correction = (f.detach() * p.detach()).sum(dim=1)
+        
+        return primal_val.detach() + grad_term - correction
