@@ -1,0 +1,13 @@
+\begin{tikzpicture}[node distance=20mm, >=Latex, font=\small]
+    \node[draw, rounded corners, minimum width=20mm] (tx) {Transaction $\vx$};
+    \node[draw, rounded corners, right=of tx, minimum width=30mm] (model) {\CACIS{} Model};
+    \node[draw, rounded corners, right=of model, minimum width=30mm] (decision) {Decision Rule $\hat{y}$};
+    \node[draw, rounded corners, below=of decision, minimum width=30mm] (outcome) {Ground Truth $Y$};
+    \node[draw, rounded corners, below=of model, minimum width=30mm] (regret) {Regret Audit};
+    
+    \draw[->] (tx) -- (model);
+    \draw[->] (model) -- (decision);
+    \draw[->, dashed] (decision) -- node[right] {60-120 days} (outcome);
+    \draw[->] (outcome) -- (regret);
+    \draw[->] (regret) -- node[left] {Feedback} (model);
+\end{tikzpicture}

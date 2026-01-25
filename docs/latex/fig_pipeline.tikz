@@ -1,0 +1,9 @@
+\begin{tikzpicture}[node distance=12mm, >=Latex, font=\small]
+\node[draw, rounded corners, align=center, minimum width=10mm, minimum height=9mm] (x) {$\vx$};
+\node[draw, rounded corners, align=center, minimum width=20mm, minimum height=9mm, right=of x] (model) {model\\$\vp_\theta(\vx)$};
+\node[draw, rounded corners, align=center, minimum width=35mm, minimum height=9mm, right=of model] (risk) {expected cost\\$r(j\mid \vp)=\sum_i p_i C_{ij}$};
+\node[draw, rounded corners, align=center, minimum width=30mm, minimum height=9mm, right=of risk] (decision) {decision\\$\hat{y}$};
+\draw[->] (x) -- (model);
+\draw[->] (model) -- (risk);
+\draw[->] (risk) -- (decision);
+\end{tikzpicture}

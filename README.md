@@ -1,10 +1,26 @@
-# Cost-Aware Classification + Fraud Benchmark (IEEE-CIS)
+# 🚀 Cost-Aware Classification + Fraud Benchmark (IEEE-CIS)
 
 **Author:** Warith Harchaoui <wharchaoui@nexton-group.com>
 
 Corporate research/engineering repository for **cost-aware classification** with **example-dependent misclassification costs**.
 
-## Overview
+## 📍 Table of Contents
+
+- [Overview](#-overview)
+- [Available Loss Functions](#-available-loss-functions)
+  - [Baseline Losses](#1-baseline-losses)
+  - [Cost-Aware Losses (Optimal Transport)](#2-cost-aware-losses-optimal-transport)
+- [Epsilon (ε) Tuning Guide](#️-epsilon-ε-tuning-guide)
+- [Performance Tips](#-performance-tips)
+- [Complete Usage Guide](#-complete-usage-guide)
+- [Metrics Explained](#-metrics-explained)
+- [Choosing a Loss Function](#-choosing-a-loss-function)
+- [Documentation & Resources](#-documentation)
+- [Tests](#-tests)
+- [Citation](#-citation)
+- [License](#-license)
+
+## 🎯 Overview
 
 This repository implements multiple loss functions for cost-aware classification, where different misclassifications have different costs. Traditional cross-entropy treats all errors equally, but in real-world scenarios (e.g., fraud detection), some mistakes are more expensive than others.
 
@@ -473,20 +489,20 @@ checkpoint_best.pt          # Best checkpoint (by PR-AUC)
 train_ema_metrics.csv       # Training metrics (EMA smoothed)
 val_metrics.csv               # Validation metrics over time
 val_precision_recall_curve.png  # PR curve visualization
-val_pr_auc.png                  # PR-AUC vs iteration
-val_expected_opt_regret.png     # Expected optimal regret
-val_realized_regret.png         # Realized regret
-train_expected_opt_regret.png   # Training regret (EMA smoothed)
-train_realized_regret.png       # Training realized regret
-train_pr_auc.png                # Training PR-AUC (EMA smoothed)
+val_pr_auc.png                  # PR-AUC vs iteration (the higher, the better)
+val_expected_opt_regret.png     # Expected optimal regret (the lower, the better)
+val_realized_regret.png         # Realized regret (the lower, the better)
+train_expected_opt_regret.png   # Training regret (EMA smoothed, the lower, the better)
+train_realized_regret.png       # Training realized regret (the lower, the better)
+train_pr_auc.png                # Training PR-AUC (EMA smoothed, the higher, the better)
 train_precision_recall_curve.png # Training PR curve
 ```
 
 ### Metrics Explained
 
-- **PR-AUC (Precision-Recall Area Under Curve):** Primary metric for imbalanced fraud detection
-- **Expected Optimal Regret:** Expected cost under optimal decision-making given predictions
-- **Realized Regret:** Actual cost incurred from model predictions
+- **PR-AUC (Precision-Recall Area Under Curve):** Primary metric for imbalanced fraud detection (the higher, the better)
+- **Expected Optimal Regret:** Expected cost under optimal decision-making given predictions (the lower, the better)
+- **Realized Regret:** Actual cost incurred from model predictions (the lower, the better)
 - Lower regret = better cost-aware performance
 
 ## 🎯 Choosing a Loss Function
@@ -504,11 +520,24 @@ train_precision_recall_curve.png # Training PR curve
 
 **Recommendation for research:** Compare `sinkhorn_envelope`, `sinkhorn_autodiff`, and `sinkhorn_fenchel_young` to understand gradient quality vs computational trade-offs.
 
-## 📚 Documentation
+## 📚 Documentation & Resources
 
-- [`docs/math.md`](docs/math.md) — Mathematical derivations and the explicit mapping between $\varepsilon$ and POT's `reg` parameter
-- [`docs/fraud_business_and_cost_matrix.md`](docs/fraud_business_and_cost_matrix.md) — Business value model and per-example cost matrix construction for fraud detection
-- [`examples/sinkhorn_pot_example.py`](examples/sinkhorn_pot_example.py) — Standalone example demonstrating SinkhornPOTLoss usage
+- [**`docs/math.md`**](docs/math.md) — Mathematical foundations and the explicit mapping between $\varepsilon$ and POT's `reg` parameter.
+- [**`docs/fraud_business_and_cost_matrix.md`**](docs/fraud_business_and_cost_matrix.md) — Business value model and per-example cost matrix construction for fraud detection.
+- [**`examples/sinkhorn_pot_example.py`**](examples/sinkhorn_pot_example.py) — Standalone example demonstrating `SinkhornPOTLoss` usage.
+
+## ✍️ Citation
+
+If you use this work in your research, please cite:
+
+```bibtex
+@inproceedings{harchaoui2026cacis,
+  title={Cost-Aware Classification with Optimal Transport for E-commerce Fraud Detection},
+  author={Harchaoui, Warith and Pantanacce, Laurent},
+  booktitle={The 32nd ACM SIGKDD Conference on Knowledge Discovery and Data Mining (KDD '26)},
+  year={2026}
+}
+```
 
 ## 🔬 Example: Comprehensive Benchmark
 

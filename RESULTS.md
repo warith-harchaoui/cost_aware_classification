@@ -21,20 +21,20 @@ The benchmark run is currently executing in the background. Once complete, the f
 ### Cross Entropy Baseline
 Precision-Recall Curve (with "Luck" baseline) and Regret History.
 
-![Cross Entropy PR](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_pr.png)
-![Cross Entropy Regret](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_regret.png)
+![Cross Entropy PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_pr.png)
+![Cross Entropy Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_regret.png)
 
 ### Sinkhorn POT (Fixed)
 Precision-Recall Curve and Regret History showing valid learning (non-zero gradients).
 
-![Sinkhorn POT PR](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_pr.png)
-![Sinkhorn POT Regret](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_regret.png)
+![Sinkhorn POT PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_pr.png)
+![Sinkhorn POT Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_regret.png)
 
 ### Sinkhorn Envelope (Fixed)
 Should match POT results closely.
 
-![Sinkhorn Envelope PR](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_pr.png)
-![Sinkhorn Envelope Regret](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_regret.png)
+![Sinkhorn Envelope PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_pr.png)
+![Sinkhorn Envelope Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_regret.png)
 
 ## How to Reproduce
 Run the full benchmark with temporal split (approx. several hours on CPU):

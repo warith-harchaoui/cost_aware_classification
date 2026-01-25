@@ -1,0 +1,13 @@
+\begin{tikzpicture}[
+    box/.style={draw, rectangle, rounded corners, minimum width=2.5cm, minimum height=0.8cm, font=\footnotesize},
+    arrow/.style={-Latex, thick}
+]
+    \node[box] (base) {CostAwareLoss};
+    \node[box, below left=of base, xshift=-5mm] (fy) {SinkhornFenchelYoung};
+    \node[box, below right=of base, xshift=5mm] (pot) {SinkhornPOT};
+    \node[box, below=of base] (env) {SinkhornEnvelope};
+    
+    \draw[arrow] (fy) -- (base);
+    \draw[arrow] (pot) -- (base);
+    \draw[arrow] (env) -- (base);
+\end{tikzpicture}

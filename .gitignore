@@ -4,6 +4,19 @@
 .DS_Store
 */.DS_Store
 
+*.aux
+*.out
+*.log
+*.bbl
+*.blg
+*.pdf
+*.out
+*.aux
+*.toc
+*.lot
+*.lof
+*.lo
+
 # Some folders
 ieee-fraud-detection/
 */__pycache__/

@@ -8,10 +8,10 @@ This document provides mathematical foundations for the cost-aware classificatio
 
 This repository implements **four** cost-aware losses for multi-class classification:
 
-1. **SinkhornFenchelYoungLoss** — Implicit Fenchel–Young with Frank–Wolfe inner solver
-2. **SinkhornEnvelopeLoss** — Custom Sinkhorn with envelope gradients
-3. **SinkhornFullAutodiffLoss** — Custom Sinkhorn with full autodiff
-4. **SinkhornPOTLoss** — POT library Sinkhorn with envelope gradients
+1. **`SinkhornFenchelYoungLoss`** — Implicit Fenchel–Young with Frank–Wolfe inner solver
+2. **`SinkhornEnvelopeLoss`** — Custom Sinkhorn with envelope gradients
+3. **`SinkhornFullAutodiffLoss`** — Custom Sinkhorn with full autodiff
+4. **`SinkhornPOTLoss`** — POT library Sinkhorn with envelope gradients
 
 All losses share common ingredients:
 
@@ -36,12 +36,7 @@ This flexibility enables modeling scenarios where misclassification costs vary p
 
 Balanced entropic optimal transport between distributions $p, q \in \Delta_K$ is defined as:
 
-```math
-\mathrm{OT}_\varepsilon(p,q) \;=\; \min_{P \in \mathbb{R}_+^{K\times K}}
-\;\langle P, C \rangle \;+\; \varepsilon\;\mathrm{KL}(P \,\|\, p\otimes q)
-\quad\text{s.t.}\quad
-P\mathbf{1} = p,\;\; P^\top \mathbf{1} = q.
-```
+$$ \mathrm{OT}_\varepsilon(p,q) \;=\; \min_{P \in \mathbb{R}_+^{K\times K}} \;\langle P, C \rangle \;+\; \varepsilon\;\mathrm{KL}(P \,\|\, p\otimes q) \quad\text{s.t.}\quad P\mathbf{1} = p,\;\; P^\top \mathbf{1} = q. $$
 
 The entropic regularization parameter is **the scalar multiplying the KL term**:
 
@@ -51,9 +46,7 @@ The entropic regularization parameter is **the scalar multiplying the KL term**:
 
 **For balanced KL-regularized formulation:**
 
-```math
-\boxed{\texttt{POT.reg} = \varepsilon = \texttt{our epsilon}}
-```
+$$ \boxed{\texttt{POT.reg} = \varepsilon = \texttt{our epsilon}} $$
 
 This means an "apples-to-apples" comparison across implementations requires matching this scalar value.
 
@@ -64,25 +57,19 @@ This means an "apples-to-apples" comparison across implementations requires matc
 All cost-aware losses support `epsilon_mode` parameter with three adaptive methods:
 
 1. **`offdiag_mean`** (default)
-   ```math
-   \varepsilon = \alpha \cdot \text{mean}(C_{i,j} : i \neq j)
-   ```
+   $$ \varepsilon = \alpha \cdot \text{mean}(C_{i,j} : i \neq j) $$
    - Uses average off-diagonal cost
    - Balanced, works well in most cases
    - **Recommended as default**
 
 2. **`offdiag_median`**
-   ```math
-   \varepsilon = \alpha \cdot \text{median}(C_{i,j} : i \neq j)
-   ```
+   $$ \varepsilon = \alpha \cdot \text{median}(C_{i,j} : i \neq j) $$
    - Uses median off-diagonal cost
    - **Robust to outlier costs**
    - Recommended when cost distribution has extreme values
 
 3. **`offdiag_max`**
-   ```math
-   \varepsilon = \alpha \cdot \max(C_{i,j} : i \neq j)
-   ```
+   $$ \varepsilon = \alpha \cdot \max(C_{i,j} : i \neq j) $$
    - Uses maximum off-diagonal cost
    - **Conservative regularization**
    - Ensures all costs are well-regularized

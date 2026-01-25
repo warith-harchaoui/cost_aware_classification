@@ -355,9 +355,9 @@ This repository implements the following losses for cost-aware training:
 
 For validation, report at least:
 
-1. **Mean realized regret:** $C_{y_i,\hat y_i}$ using the cost-optimal decision rule
-2. **Mean expected optimal regret:** $\min\big(p_i L_{\text{fraud}}(M_i), (1-p_i)(1+\rho_{FD})M_i\big)$
-3. **PR-AUC** (sanity metric for class imbalance)
+1. **Mean realized regret:** $C_{y_i,\hat y_i}$ using the cost-optimal decision rule (the lower, the better)
+2. **Mean expected optimal regret:** $\min\big(p_i L_{\text{fraud}}(M_i), (1-p_i)(1+\rho_{FD})M_i\big)$ (the lower, the better)
+3. **PR-AUC** (sanity metric for class imbalance, the higher, the better)
 
 **Example metrics output:**
 ```
@@ -457,10 +457,10 @@ If training seems unstable:
 Track both classification and cost metrics:
 ```python
 results = {
-    'pr_auc': 0.847,
-    'expected_opt_regret_euro': 12.34,
-    'realized_regret_euro': 14.56,
-    'regret_vs_optimal_ratio': 1.18,  # 18% suboptimal
+    'pr_auc': 0.847,                  # (the higher, the better)
+    'expected_opt_regret_euro': 12.34, # (the lower, the better)
+    'realized_regret_euro': 14.56,     # (the lower, the better)
+    'regret_vs_optimal_ratio': 1.18,  # (the lower, the better)
 }
 ```
 

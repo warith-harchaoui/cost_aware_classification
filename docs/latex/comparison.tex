@@ -1,0 +1,289 @@
+
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\DeltaK}{\Delta_K}
+\newcommand{\1}{\mathbf{1}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\LSE}{\operatorname{LSE}}
+\newcommand{\OT}{\operatorname{OT}}
+\newcommand{\eps}{\varepsilon}
+
+\newcommand{\SettingCACIS}{\textbf{CACIS Implementation}}
+\newcommand{\SettingEnvelope}{\textbf{POT Sinkhorn Envelope Implementation}}
+\newcommand{\SettingAutodiff}{\textbf{POT Sinkhorn Full Autodiff Implementation}}
+
+\title{Detailed Comparison: CACISLoss vs POT Sinkhorn OT-Loss Baselines}
+\author{Warith Harchaoui}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Context and goal}
+You want to compare your \emph{CACISLoss} implementation (a cost-aware Fenchel--Young loss with an OT-flavored regularizer) against two POT-based baselines that use a Sinkhorn OT objective, differing only in \emph{how gradients are computed}:
+\begin{itemize}[leftmargin=2em]
+  \item \SettingCACIS: inner solver is Frank--Wolfe on a simplex QP; you \emph{do not backprop through the inner solver}.
+  \item \SettingEnvelope: POT Sinkhorn OT-loss baseline with an \emph{envelope / implicit-ish} gradient mode (no full unrolling).
+  \item \SettingAutodiff: POT Sinkhorn OT-loss baseline with \emph{full unrolled autodiff} through Sinkhorn iterations.
+\end{itemize}
+
+\section{Common notation}
+\begin{itemize}[leftmargin=2em]
+  \item $K$ = number of classes, $B$ = batch size.
+  \item Scores/logits: $f \in \R^K$; batched scores: $F \in \R^{B\times K}$.
+  \item Class label: $y \in \{1,\dots,K\}$; one-hot: $\delta_y \in \DeltaK$.
+  \item Predicted probability vector: $p = \softmax(f) \in \DeltaK$ (baseline POT losses typically operate on $p$).
+  \item Cost matrix: $C \in \R_+^{K\times K}$ (or example-dependent $C \in \R_+^{B\times K\times K}$), with $C_{ii}=0$.
+  \item Entropic regularization strength: $\eps > 0$.
+\end{itemize}
+
+\section{High-level summary (what is being compared?)}
+\subsection{CACIS in one paragraph}
+CACIS is an \emph{implicit} Fenchel--Young loss for cost-sensitive classification.
+It defines a convex ``regularizer'' $\Omega(\alpha)$ on the probability simplex, and uses the Fenchel conjugate $\Omega^\*(f)$ to build
+\[
+\ell_{\text{CACIS}}(y,f) = \Omega^\*(f) - f_y,
+\]
+which yields a clean gradient structure of the form ``prediction minus one-hot'' when $\nabla \Omega^\*(f)$ is used as the predicted distribution.
+
+In your implementation, $\Omega$ is a Sinkhorn-style OT regularizer (involving $\OT_{C,\eps}(\alpha,\alpha)$), and $\Omega^\*(f)$ is evaluated by solving an inner simplex-constrained optimization (implemented via Frank--Wolfe), without differentiating through those solver iterations.
+
+\subsection{POT OT-loss baselines in one paragraph}
+A standard ``OT-as-loss'' baseline computes an entropic OT quantity between a predicted distribution $p$ and a target distribution (often $\delta_y$ in classification):
+\[
+\ell_{\text{POT}}(y,f) = \OT_{C,\eps}\big(p,\delta_y\big) \quad \text{with } p = \softmax(f).
+\]
+The Sinkhorn algorithm approximates $\OT_{C,\eps}$ via iterations. POT provides multiple gradient strategies; here we focus on:
+\begin{itemize}[leftmargin=2em]
+  \item an \emph{envelope / implicit-ish} gradient mode (do not backprop through all iterations),
+  \item a \emph{full autodiff} mode (unroll Sinkhorn iterations and backprop through them).
+\end{itemize}
+
+\section{Comparison tables}
+\subsection{Mathematics}
+\renewcommand{\arraystretch}{1.18}
+\begin{longtable}{@{}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}@{}}
+\toprule
+\textbf{Item} & \SettingCACIS & \SettingEnvelope & \SettingAutodiff \\
+\midrule
+\endhead
+
+\textbf{Primary loss} &
+Fenchel--Young: $\ell(y,f)=\Omega^\*(f)-f_y$. &
+OT-as-loss: $\ell(y,f)=\OT_{C,\eps}(p,\delta_y)$ (or Sinkhorn divergence variant), $p=\softmax(f)$. &
+Same objective as envelope version. \\
+\addlinespace
+
+\textbf{What ``OT'' means here} &
+OT appears through the \emph{regularizer} $\Omega(\alpha)$, e.g.\ Sinkhorn negentropy/geometry on $\DeltaK$. &
+OT is the \emph{loss value} between predicted and target distributions. &
+Same. \\
+\addlinespace
+
+\textbf{Inner optimization target} &
+Compute $\Omega^\*(f)$ via an inner problem over $\alpha\in\DeltaK$ (a simplex-constrained optimization that your code reduces to a quadratic form $\alpha^\top M(f)\alpha$). &
+Compute a transport plan / dual potentials for $\OT_{C,\eps}(p,\delta_y)$ by Sinkhorn iterations. &
+Same. \\
+\addlinespace
+
+\textbf{Meaning of iterations} &
+Frank--Wolfe steps approach $\alpha^\* \approx \argmin_{\alpha\in\DeltaK}\alpha^\top M\alpha$. &
+Sinkhorn steps approach the entropic OT optimum (plan/potentials) satisfying marginal constraints. &
+Same. \\
+\addlinespace
+
+\textbf{Prediction used for gradient} &
+Implicit prediction $q=\nabla \Omega^\*(f)$, yielding a ``prediction error'' gradient $\nabla_f \ell = q-\delta_y$ (Fenchel--Young structure). &
+Prediction is explicit: $p=\softmax(f)$; gradient flows from OT objective back to $p$ and then to $f$. Envelope mode avoids full unrolling of Sinkhorn. &
+Same, but gradient is computed by unrolling Sinkhorn steps. \\
+\addlinespace
+
+\textbf{Calibration / properness intuition} &
+Designed as a principled surrogate for cost-sensitive risk via Fenchel--Young construction (often chosen for good calibration properties when $\Omega$ is appropriate). &
+Depends on the exact OT functional used; ``OT-to-onehot'' behaves like a cost-weighted expected loss plus entropy-like smoothing (not the same surrogate as CACIS). &
+Same. \\
+\addlinespace
+
+\textbf{Role of $\eps$} &
+Controls smoothing/temperature of the regularizer and thus the sharpness of $\Omega^\*$ and the induced $q$. &
+Controls entropic smoothing of $\OT_{C,\eps}$; smaller $\eps$ is sharper but less stable numerically. &
+Same. \\
+\addlinespace
+
+\textbf{Effect of class geometry} &
+Class geometry is encoded through $C$ inside the regularizer; influences $q$ via $\Omega^\*(f)$. &
+Class geometry is encoded directly in OT distance between $p$ and target. &
+Same. \\
+\addlinespace
+
+\textbf{Shift invariance in scores} &
+Typically invariant to adding a constant to all logits (a common property of Fenchel--Young constructions). &
+$ p=\softmax(f)$ is invariant to $f\mapsto f + a\1$, so OT-loss inherits invariance. &
+Same. \\
+\addlinespace
+
+\textbf{If labels are distributions} &
+Naturally supports target distributions via Fenchel--Young structure, depending on how you set up $f_y$ term (can generalize beyond one-hot). &
+Naturally supports target distributions by replacing $\delta_y$ with any $b\in\DeltaK$. &
+Same. \\
+\addlinespace
+
+\textbf{Decision rule at inference} &
+Often: compute predicted distribution $q$ (implicit) then choose a decision rule (e.g.\ Bayes rule under cost). &
+Typically: compute $p$ then choose a decision rule (argmax, or cost-minimizing decision). &
+Same. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Programming}
+\renewcommand{\arraystretch}{1.18}
+\begin{longtable}{@{}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}@{}}
+\toprule
+\textbf{Item} & \SettingCACIS & \SettingEnvelope & \SettingAutodiff \\
+\midrule
+\endhead
+
+\textbf{Core dependency} &
+Pure PyTorch module (custom loss, custom inner solver). &
+POT + torch backend tensors (plus your torch model). &
+Same. \\
+\addlinespace
+
+\textbf{Main API shape} &
+\texttt{loss = CACISLoss(...)(scores, targets, C).loss} &
+\texttt{loss = OT(p, onehot)} with POT solver; backward uses envelope gradient mode. &
+Same, but backward unrolls Sinkhorn. \\
+\addlinespace
+
+\textbf{What you implement yourself} &
+(i) $\eps$ selection logic, (ii) baseline scores and normalized reporting, (iii) construction of $M$ in a stable log-domain way, (iv) Frank--Wolfe solver on simplex QP. &
+(i) mapping logits $\to p$ (softmax), (ii) one-hot target (or distribution target), (iii) cost matrix handling/broadcasting, (iv) selecting POT method/iterations/\eps and gradient mode. &
+Same. \\
+\addlinespace
+
+\textbf{How gradients are obtained} &
+By design: inner FW loop is inside \texttt{torch.no\_grad()}, so no autograd history is stored for solver steps; gradients come from the closed-form Fenchel--Young structure. &
+POT computes gradients of the OT value w.r.t.\ inputs using an envelope/implicit-ish rule (no full iteration unrolling). &
+PyTorch autograd tracks Sinkhorn iterations; backprop flows through all iterations. \\
+\addlinespace
+
+\textbf{Device placement pitfalls} &
+Mostly under your control: ensure all tensors are on the right device and dtype; your code is torch-native. &
+Need to ensure the selected POT function is truly torch-backend and stays on-device; avoid any path that triggers CPU fallbacks. &
+Same, plus higher sensitivity to accidental CPU copies (more ops). \\
+\addlinespace
+
+\textbf{Numerical stability tools} &
+You already use log-domain construction (shift + exp) to form $M$ robustly. &
+Use log-domain Sinkhorn variants when possible (``sinkhorn\_log'' style) and keep iteration counts moderate. &
+Same (even more important because gradients can explode if unstable). \\
+\addlinespace
+
+\textbf{Batching story} &
+Naturally batched over $B$ (e.g.\ $M\in\R^{B\times K\times K}$, $\alpha\in\R^{B\times K}$). &
+Prefer POT batched solvers (or vectorized calls) to avoid Python loops; ensure shapes align: $(B,K)$ marginals with $(B,K,K)$ costs when supported. &
+Same. \\
+\addlinespace
+
+\textbf{Hyperparameters you tune} &
+\texttt{solver\_iter} (FW steps), plus $\eps$ mode/scale/floor. &
+Sinkhorn iterations, $\eps$ (regularization), possibly stopping tolerance, plus gradient mode = envelope. &
+Same, but iteration budget impacts backward more strongly. \\
+\addlinespace
+
+\textbf{Implementation complexity} &
+Higher: custom math + solver, but you control invariances/normalization and you can tailor to the cost-sensitive setting. &
+Lower: use library OT solver; main work is wiring and careful configuration. &
+Moderate: wiring is similar, but debugging stability/perf is harder due to unrolled autograd. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Computation cost}
+\renewcommand{\arraystretch}{1.18}
+\begin{longtable}{@{}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}@{}}
+\toprule
+\textbf{Item} & \SettingCACIS & \SettingEnvelope & \SettingAutodiff \\
+\midrule
+\endhead
+
+\textbf{Forward compute (order)} &
+Build $M$: $O(BK^2)$; FW: $T_{\text{FW}}$ iterations of batched matrix-vector products $\sim O(BK^2T_{\text{FW}})$. &
+Sinkhorn forward: $T_{\text{SK}}$ iterations; common implementations are dominated by matrix-vector style operations $\sim O(BK^2T_{\text{SK}})$. &
+Same forward order. \\
+\addlinespace
+
+\textbf{Backward compute} &
+Cheap(er): no unrolled solver history; backward is through the closed-form differentiable pieces only. &
+Medium: envelope/implicit-ish backward avoids full unrolling; cost depends on the method but is typically below full autodiff. &
+High: unrolled backward through $T_{\text{SK}}$ iterations; cost grows roughly linearly with iteration count and can require recomputation/checkpointing. \\
+\addlinespace
+
+\textbf{Memory footprint} &
+Low(er): solver loop in \texttt{no\_grad}; store $M$ (and a few auxiliaries) per batch. &
+Moderate: store what the envelope method needs (often fewer intermediates than full unroll). &
+High: autograd graph over Sinkhorn iterations; intermediate tensors per iteration may be stored. \\
+\addlinespace
+
+\textbf{Sensitivity to iteration count} &
+Primarily affects forward time; backward is comparatively insensitive because the solver is not differentiated. &
+Affects forward and backward, but less dramatically than full autodiff. &
+Affects both forward and backward strongly; doubling iterations can almost double overall step time. \\
+\addlinespace
+
+\textbf{Sensitivity to $\eps$} &
+Very small $\eps$ can create sharp exponentials in $M$; log-domain shift helps, but solver may still become harder. &
+Very small $\eps$ makes Sinkhorn harder numerically; log-domain variants help but may require more iterations. &
+Same; instability can be amplified in gradients. \\
+\addlinespace
+
+\textbf{Best use cases (compute)} &
+Many small-$K$ problems where you want stable training and low memory overhead, and where you value implicit gradients. &
+Many small-$K$ problems where you want a clean OT baseline and a faster/robuster-than-unrolled gradient computation. &
+Smaller workloads or when you explicitly want ``true'' unrolled gradients through the OT solver, and can afford the compute/memory. \\
+\addlinespace
+
+\textbf{Common bottlenecks} &
+Forming $M$ and doing $K\times K$ batched products inside FW, especially if $K$ grows. &
+Kernel/matrix ops inside Sinkhorn; device placement issues if any fallback occurs. &
+Same as envelope, plus autograd graph size and backward-time blow-up. \\
+\bottomrule
+\end{longtable}
+
+\section{Practical experimental protocol (recommended)}
+To ensure the comparison answers the question you care about (cost-sensitive classification), a robust protocol is:
+\begin{enumerate}[leftmargin=2.2em]
+  \item \textbf{Use the same cost matrix $C$} in all three settings (and the same per-example costs if applicable).
+  \item \textbf{Match $\eps$}: use the same $\eps$ in CACIS and POT baselines (e.g.\ computed from your $\eps$-selection rule) so ``smoothing'' is comparable.
+  \item \textbf{Sweep iteration budgets}: compare a small grid, e.g.\ $T \in \{10, 25, 50, 100\}$ for FW/Sinkhorn, and measure:
+        \begin{itemize}[leftmargin=2em]
+          \item validation \emph{expected cost} under your chosen decision rule,
+          \item step time (forward+backward),
+          \item peak memory,
+          \item training stability (NaNs, exploding gradients).
+        \end{itemize}
+  \item \textbf{Decision rule}: report both (i) argmax accuracy and (ii) cost-aware decisions (e.g.\ $\argmin_k \sum_j p_j C_{j,k}$), because the cost matrix is the real target.
+\end{enumerate}
+
+\section{Notes on ``iteration equivalence''}
+Sinkhorn iterations and Frank--Wolfe iterations are comparable as \emph{inner-solver budgets}, but they solve \emph{different} inner optimization problems:
+\begin{itemize}[leftmargin=2em]
+  \item Sinkhorn: solves an entropic OT problem (plan/potentials) with fixed marginals.
+  \item Frank--Wolfe (in your CACIS): solves a simplex-constrained problem used to evaluate $\Omega^\*(f)$.
+\end{itemize}
+Therefore, matching ``number of iterations'' is meaningful for compute budgeting, but not a guarantee of equal approximation error or equal gradient quality.
+
+\end{document}

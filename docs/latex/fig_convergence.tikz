@@ -1,0 +1,6 @@
+\begin{tikzpicture}
+    \draw[->] (0,0) -- (4,0) node[right] {Iteration $t$};
+    \draw[->] (0,0) -- (0,3) node[above] {Gap $\mathcal{G}(\valpha^{(t)}) - \mathcal{G}(\valpha^\star)$};
+    \draw[thick, blue] (0, 2.5) .. controls (1, 1) and (2, 0.5) .. (3.5, 0.2);
+    \node[blue] at (3.5, 0.5) {$\sim 1/t$};
+\end{tikzpicture}
