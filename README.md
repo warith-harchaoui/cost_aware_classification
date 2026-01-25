@@ -301,6 +301,43 @@ Epoch 9: ε =  0.15 (0.1× base)
 - `--epsilon-schedule-start-mult`: Starting multiplier (default: 10.0)
 - `--epsilon-schedule-end-mult`: Ending multiplier (default: 0.1)
 
+## ⚡ Performance Tips
+
+### Device Selection
+
+**Apple Silicon (M1/M2/M3):**
+```bash
+# CPU is often faster than MPS for POT-based losses
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 --device cpu
+
+# MPS works well for other losses
+python -m examples.fraud_detection --loss sinkhorn_envelope --epochs 5 --device mps
+```
+
+**NVIDIA GPU:**
+```bash
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 --device cuda
+```
+
+### Speed Optimizations
+
+**Faster training (lower accuracy):**
+```bash
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
+  --batch-size 128 --sinkhorn-max-iter 10
+```
+
+**Balanced (recommended):**
+```bash
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 5 \
+  --batch-size 256 --sinkhorn-max-iter 20
+```
+
+**Quick testing:**
+```bash
+python -m examples.fraud_detection --loss sinkhorn_pot --epochs 2 --quick
+```
+
 ## 🚀 Complete Usage Guide
 
 ### Installation

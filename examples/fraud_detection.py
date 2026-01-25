@@ -851,8 +851,8 @@ def main() -> None:
 
     parser.add_argument("--epochs", type=int, default=10,
                        help="Number of training epochs (additional epochs if --resume is used)")
-    parser.add_argument("--batch-size", type=int, default=512,
-                       help="Training and validation batch size (default: 512)")
+    parser.add_argument("--batch-size", type=int, default=256,
+                       help="Training and validation batch size (default: 256). Lower values (128-256) recommended for cost-aware losses for better speed.")
     parser.add_argument("--lr", type=float, default=1e-4,
                        help="Learning rate for AdamW optimizer (default: 1e-4)")
     parser.add_argument("--split", type=float, default=0.3,
@@ -862,7 +862,8 @@ def main() -> None:
     parser.add_argument("--out", type=str, default="fraud_output",
                        help="Output root directory for all runs (default: fraud_output)")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"],
-                       help="Device to use for training: auto (detect), cpu, cuda (NVIDIA GPU), or mps (Apple Silicon)")
+                       help="Device to use for training: auto (detect), cpu, cuda (NVIDIA GPU), or mps (Apple Silicon). "
+                            "Note: For POT-based losses (sinkhorn_pot) on Apple Silicon, CPU is often faster than MPS.")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed for reproducibility (default: 42)")
 
@@ -900,7 +901,7 @@ def main() -> None:
     parser.add_argument("--epsilon", type=float, default=None, 
                        help="Fixed epsilon value for cost-aware losses (overrides --epsilon-mode). Not recommended; use adaptive modes instead.")
     parser.add_argument("--sinkhorn-max-iter", type=int, default=50,
-                       help="Maximum Sinkhorn iterations for OT-based losses (default: 50)")
+                       help="Maximum Sinkhorn iterations for OT-based losses (default: 50). Lower values (10-20) for faster training.")
     parser.add_argument("--cacis-solver-iter", type=int, default=30,
                        help="Frank-Wolfe solver iterations for Fenchel-Young loss (default: 30)")
     
@@ -936,7 +937,17 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
-    device = get_device() if args.device == "auto" else torch.device(args.device)
+    
+    # Smart device selection
+    if args.device == "auto":
+        device = get_device()
+        # Override for POT-based losses on Apple Silicon: CPU is faster than MPS
+        if args.loss == "sinkhorn_pot" and device.type == "mps":
+            logging.info("Overriding device: MPS → CPU (faster for sinkhorn_pot on Apple Silicon)")
+            device = torch.device("cpu")
+    else:
+        device = torch.device(args.device)
+    
     logging.info("Using device: %s", device)
 
     # Seeds when not resuming (best-effort reproducibility).
