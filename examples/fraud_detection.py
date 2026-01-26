@@ -1337,14 +1337,14 @@ def main() -> None:
         except ImportError as e:
             logging.error("[%s] Skipped (missing dependency): %s", loss_name, str(e))
 
-    if results:
-        summary = pd.DataFrame(results).T
-        summary_path = out_root / "summary.csv"
-        summary.to_csv(summary_path, index=True)
-        logging.info("Saved central summary to: %s", summary_path)
-        
-        with pd.option_context("display.max_columns", 50, "display.width", 140):
-            logging.info("Final Summary (Train + Val):\n%s", summary)
+        if results:
+            summary = pd.DataFrame(results).T
+            summary_path = out_root / "summary.csv"
+            summary.to_csv(summary_path, index=True)
+            logging.info("Saved central summary to: %s", summary_path)
+            
+            with pd.option_context("display.max_columns", 50, "display.width", 140):
+                logging.info("Updated Summary (Train + Val):\n%s", summary)
 
     logging.info("Done.")
 
