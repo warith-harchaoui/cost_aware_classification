@@ -1335,7 +1335,9 @@ def main() -> None:
             
             results[loss_name] = row
         except ImportError as e:
-            logging.error("[%s] Skipped (missing dependency): %s", loss_name, str(e))
+            msg = f"[{loss_name}] Skipped (missing dependency): {str(e)}"
+            logging.error(msg)
+            raise ValueError(msg)
 
         if results:
             summary = pd.DataFrame(results).T
