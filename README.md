@@ -2,27 +2,52 @@
 
 **Author:** Warith Harchaoui <wharchaoui@nexton-group.com>
 
-Corporate research/engineering repository for **cost-aware classification** with **example-dependent misclassification costs**.
+Corporate research/engineering repository for **cost-aware classification** with **example-dependent misclassification costs**. This toolbox transforms traditional machine learning from "matching labels" to "**maximizing business profit**".
+
+## 🎯 The Business Problem
+
+Traditional classification (Cross-Entropy) treats all errors as equal. In the real world, **some mistakes are far more expensive than others**:
+- **False Decline:** Turning away a legit customer costs the transaction margin + customer frustration + possible churn.
+- **False Approval (Fraud):** Accepting a stolen card costs the full transaction amount + chargeback fees + operational overhead.
+
+This repository implements **Optimal Transport (OT)** based loss functions that "understand" these costs during training, allowing models to make decisions that minimize financial regret rather than just counting errors.
+
+---
 
 ## 📍 Table of Contents
 
-- [Overview](#-overview)
+- [The Business Problem](#-the-business-problem)
+- [Quick Start for Decisions Makers](#-quick-start-for-decisions-makers)
 - [Available Loss Functions](#-available-loss-functions)
   - [Baseline Losses](#1-baseline-losses)
   - [Cost-Aware Losses (Optimal Transport)](#2-cost-aware-losses-optimal-transport)
 - [Epsilon (ε) Tuning Guide](#️-epsilon-ε-tuning-guide)
 - [Performance Tips](#-performance-tips)
 - [Complete Usage Guide](#-complete-usage-guide)
-- [Metrics Explained](#-metrics-explained)
+- [Metrics & Evaluation](#-metrics--evaluation)
 - [Choosing a Loss Function](#-choosing-a-loss-function)
 - [Documentation & Resources](#-documentation)
 - [Tests](#-tests)
 - [Citation](#-citation)
 - [License](#-license)
 
-## 🎯 Overview
+---
 
-This repository implements multiple loss functions for cost-aware classification, where different misclassifications have different costs. Traditional cross-entropy treats all errors equally, but in real-world scenarios (e.g., fraud detection), some mistakes are more expensive than others.
+## 💡 Quick Start for Decisions Makers
+
+If you want to see the business impact immediately, run the comprehensive benchmark:
+
+```bash
+# Benchmark all losses against financial baselines
+python -m examples.fraud_detection --loss all --epochs 15 --run-id business_impact
+```
+
+**What to look for in results:**
+- **Realized Regret:** The actual money lost in production.
+- **Expected Optimal Regret:** The theoretical minimum loss possible.
+- **Naive Baseline:** What happens if you simply "Approve All" or "Decline All".
+
+---
 
 ## 📋 Available Loss Functions
 
@@ -317,7 +342,33 @@ Epoch 9: ε =  0.15 (0.1× base)
 - `--epsilon-schedule-start-mult`: Starting multiplier (default: 10.0)
 - `--epsilon-schedule-end-mult`: Ending multiplier (default: 0.1)
 
+## 📊 Metrics & Evaluation
+
+To truly measure business success, we move beyond Accuracy and ROC-AUC:
+
+- **PR-AUC (Precision-Recall Area Under Curve):** Primary classification metric for imbalanced fraud data (**higher is better**).
+- **Luck Baseline:** A horizontal line on the PR curve representing a random classifier (equivalent to fraud prevalence).
+- **Expected Optimal Regret:** The expected business cost incurred if we make the mathematically optimal decision based on our model's predictions (**lower is better**).
+- **Realized Regret:** The actual money lost by following the model's decisions on a test set (**lower is better**). Includes:
+  - Total $ lost to accepted fraud.
+  - Total $ value lost due to false declines.
+- **Naive Baseline:** The EMA of the better of two constant strategies: "Approve Everything" ($0 fraud detection, massive fraud losses) or "Decline Everything" ($0 fraud losses, massive lost sales). **Your model must beat this to be useful.**
+
+---
+
 ## ⚡ Performance Tips
+
+### Robust Data Loading
+We recommend using the Python engine for reading large IEEE-CIS CSV files to avoid `ParserError` issues:
+```python
+df = pd.read_csv('train_transaction.csv', engine='python')
+```
+
+### Numerical Stability
+Fraud datasets often have extreme values. We recommend:
+- **`RobustScaler`**: To handle outliers in transaction amounts.
+- **`CosineAnnealingLR`**: For smoother convergence during training.
+- **Lower Learning Rates**: Starting at `1e-5` often provides more stable gradients for Sinkhorn-based losses.
 
 ### Device Selection
 
@@ -498,12 +549,6 @@ train_pr_auc.png                # Training PR-AUC (EMA smoothed, the higher, the
 train_precision_recall_curve.png # Training PR curve
 ```
 
-### Metrics Explained
-
-- **PR-AUC (Precision-Recall Area Under Curve):** Primary metric for imbalanced fraud detection (the higher, the better)
-- **Expected Optimal Regret:** Expected cost under optimal decision-making given predictions (the lower, the better)
-- **Realized Regret:** Actual cost incurred from model predictions (the lower, the better)
-- Lower regret = better cost-aware performance
 
 ## 🎯 Choosing a Loss Function
 
