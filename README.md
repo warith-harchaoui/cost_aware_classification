@@ -352,7 +352,7 @@ To truly measure business success, we move beyond Accuracy and ROC-AUC:
 - **Realized Regret:** The actual money lost by following the model's decisions on a test set (**lower is better**). Includes:
   - Total $ lost to accepted fraud.
   - Total $ value lost due to false declines.
-- **Naive Baseline:** The EMA of the better of two constant strategies: "Approve Everything" ($0 fraud detection, massive fraud losses) or "Decline Everything" ($0 fraud losses, massive lost sales). **Your model must beat this to be useful.**
+- **Naive Baseline:** The smoothed average of the better of two constant strategies: "Approve Everything" ($0 fraud detection, massive fraud losses) or "Decline Everything" ($0 fraud losses, massive lost sales). **Your model must beat this to be useful.**
 
 ---
 
@@ -537,15 +537,15 @@ Each run creates a directory `fraud_output/<run-id>/<loss_name>/` with:
 ```
 checkpoint_last.pt          # Latest checkpoint (for resuming)
 checkpoint_best.pt          # Best checkpoint (by PR-AUC)
-train_ema_metrics.csv       # Training metrics (EMA smoothed)
+train_smoothed_metrics.csv       # Training metrics (smoothed)
 val_metrics.csv               # Validation metrics over time
 val_precision_recall_curve.png  # PR curve visualization
 val_pr_auc.png                  # PR-AUC vs iteration (the higher, the better)
 val_expected_opt_regret.png     # Expected optimal regret (the lower, the better)
 val_realized_regret.png         # Realized regret (the lower, the better)
-train_expected_opt_regret.png   # Training regret (EMA smoothed, the lower, the better)
+train_expected_opt_regret.png   # Training regret (smoothed, the lower, the better)
 train_realized_regret.png       # Training realized regret (the lower, the better)
-train_pr_auc.png                # Training PR-AUC (EMA smoothed, the higher, the better)
+train_pr_auc.png                # Training PR-AUC (smoothed, the higher, the better)
 train_precision_recall_curve.png # Training PR curve
 ```
 

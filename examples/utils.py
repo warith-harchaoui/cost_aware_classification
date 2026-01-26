@@ -83,11 +83,11 @@ class TrainingState:
         Training batch size (used in plot labels).
     current_iter:
         Global optimizer step count.
-    train_ema:
-        Exponential moving averages of training-batch metrics.
-        Keys are metric names; values are sequences aligned with ``train_ema_iters``.
-    train_ema_iters:
-        Iteration indices for EMA points.
+    train_smoothed:
+        Smoothed averages of training-batch metrics.
+        Keys are metric names; values are sequences aligned with ``train_smoothed_iters``.
+    train_smoothed_iters:
+        Iteration indices for smoothing points.
     val_points:
         Periodic evaluation points on a validation subset.
         Keys are metric names; values are sequences aligned with ``val_iters``.
@@ -99,8 +99,8 @@ class TrainingState:
     batch_size: int = 0
     current_iter: int = 0
 
-    train_ema: Dict[str, List[float]] = field(default_factory=dict)
-    train_ema_iters: List[int] = field(default_factory=list)
+    train_smoothed: Dict[str, List[float]] = field(default_factory=dict)
+    train_smoothed_iters: List[int] = field(default_factory=list)
 
     val_points: Dict[str, List[float]] = field(default_factory=dict)
     val_iters: List[int] = field(default_factory=list)
@@ -125,8 +125,8 @@ def training_state_to_dict(state: TrainingState) -> Dict[str, Any]:
     return {
         "batch_size": int(state.batch_size),
         "current_iter": int(state.current_iter),
-        "train_ema": {k: list(map(float, v)) for k, v in state.train_ema.items()},
-        "train_ema_iters": list(map(int, state.train_ema_iters)),
+        "train_smoothed": {k: list(map(float, v)) for k, v in state.train_smoothed.items()},
+        "train_smoothed_iters": list(map(int, state.train_smoothed_iters)),
         "val_points": {k: list(map(float, v)) for k, v in state.val_points.items()},
         "val_iters": list(map(int, state.val_iters)),
         "epoch_iters": list(map(int, state.epoch_iters)),
@@ -151,8 +151,8 @@ def training_state_from_dict(d: Dict[str, Any]) -> TrainingState:
         batch_size=int(d.get("batch_size", 0)),
         current_iter=int(d.get("current_iter", 0)),
     )
-    state.train_ema = {str(k): list(map(float, v)) for k, v in (d.get("train_ema") or {}).items()}
-    state.train_ema_iters = list(map(int, d.get("train_ema_iters") or []))
+    state.train_smoothed = {str(k): list(map(float, v)) for k, v in (d.get("train_smoothed") or d.get("train_ema") or {}).items()}
+    state.train_smoothed_iters = list(map(int, d.get("train_smoothed_iters") or d.get("train_ema_iters") or []))
     state.val_points = {str(k): list(map(float, v)) for k, v in (d.get("val_points") or d.get("probe_points") or {}).items()}
     state.val_iters = list(map(int, d.get("val_iters") or d.get("probe_iters") or []))
     state.epoch_iters = list(map(int, d.get("epoch_iters") or [0]))
@@ -160,17 +160,17 @@ def training_state_from_dict(d: Dict[str, Any]) -> TrainingState:
 
 
 # =============================================================================
-# EMA helpers
+# Smoothing helpers
 # =============================================================================
 
-def ema_update(prev: Optional[float], x: float, alpha: float) -> float:
+def smooth_update(prev: Optional[float], x: float, alpha: float) -> float:
     """
-    Update an exponential moving average.
+    Update a smoothed average.
 
     Parameters
     ----------
     prev:
-        Previous EMA value, or None if uninitialized.
+        Previous smoothed value, or None if uninitialized.
     x:
         New observation.
     alpha:
@@ -179,7 +179,7 @@ def ema_update(prev: Optional[float], x: float, alpha: float) -> float:
     Returns
     -------
     float
-        Updated EMA value.
+        Updated smoothed value.
     """
     if prev is None:
         return float(x)

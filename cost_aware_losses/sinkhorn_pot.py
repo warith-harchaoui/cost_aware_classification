@@ -187,68 +187,60 @@ def _pot_sinkhorn_plan(
                 # Should not happen with log=True, but safety fallback
                 P_i, log_dict = out, {}
 
-            # POT might return numpy even if input torch (depends on backend dispatch).
-            if isinstance(P_i, torch.Tensor):
-                P[i] = P_i.to(device=device, dtype=dtype)
-            else:
-                P[i] = torch.as_tensor(P_i, device=device, dtype=dtype)
-                
-            # Extract f, g (dual potentials)
-            # method='sinkhorn_log' usually returns 'log_u', 'log_v' or 'alpha', 'beta'.
-            # If 'log_u' present: f = eps * log_u. 
-            # If 'alpha' present: f = alpha.
-            # If only 'u' present: f = eps * log(u).
-            
-            # Prioritize log domain values
-            if "log_u" in log_dict and "log_v" in log_dict:
-                 log_u = log_dict["log_u"]
-                 log_v = log_dict["log_v"]
-                 # Convert to tensor
-                 if isinstance(log_u, torch.Tensor):
-                     log_u = log_u.to(device=device, dtype=dtype)
-                 else:
-                     log_u = torch.as_tensor(log_u, device=device, dtype=dtype)
-                 if isinstance(log_v, torch.Tensor):
-                     log_v = log_v.to(device=device, dtype=dtype)
-                 else:
-                     log_v = torch.as_tensor(log_v, device=device, dtype=dtype)
-                 f[i] = reg_i * log_u
-                 g[i] = reg_i * log_v
-            
-            elif "alpha" in log_dict and "beta" in log_dict:
-                 # Standard duals in some versions?
-                 alpha = log_dict["alpha"]
-                 beta = log_dict["beta"]
-                 if isinstance(alpha, torch.Tensor):
-                     f[i] = alpha.to(device=device, dtype=dtype)
-                 else:
-                     f[i] = torch.as_tensor(alpha, device=device, dtype=dtype)
-                 if isinstance(beta, torch.Tensor):
-                     g[i] = beta.to(device=device, dtype=dtype)
-                 else:
-                     g[i] = torch.as_tensor(beta, device=device, dtype=dtype)
+            # Function to extract potentials
+            def get_potentials(ld, current_reg):
+                if "log_u" in ld and "log_v" in ld:
+                    lu = ld["log_u"]
+                    lv = ld["log_v"]
+                    lu = lu.to(device=device, dtype=dtype) if isinstance(lu, torch.Tensor) else torch.as_tensor(lu, device=device, dtype=dtype)
+                    lv = lv.to(device=device, dtype=dtype) if isinstance(lv, torch.Tensor) else torch.as_tensor(lv, device=device, dtype=dtype)
+                    return current_reg * lu, current_reg * lv
+                elif "alpha" in ld and "beta" in ld:
+                    alpha = ld["alpha"]
+                    beta = ld["beta"]
+                    alpha = alpha.to(device=device, dtype=dtype) if isinstance(alpha, torch.Tensor) else torch.as_tensor(alpha, device=device, dtype=dtype)
+                    beta = beta.to(device=device, dtype=dtype) if isinstance(beta, torch.Tensor) else torch.as_tensor(beta, device=device, dtype=dtype)
+                    return alpha, beta
+                elif "u" in ld and "v" in ld:
+                    u_raw = ld["u"]
+                    v_raw = ld["v"]
+                    u_i = u_raw.to(device=device, dtype=dtype) if isinstance(u_raw, torch.Tensor) else torch.as_tensor(u_raw, device=device, dtype=dtype)
+                    v_i = v_raw.to(device=device, dtype=dtype) if isinstance(v_raw, torch.Tensor) else torch.as_tensor(v_raw, device=device, dtype=dtype)
+                    return current_reg * torch.log(u_i + 1e-16), current_reg * torch.log(v_i + 1e-16)
+                return torch.zeros(K, device=device, dtype=dtype), torch.zeros(K, device=device, dtype=dtype)
 
-            elif "u" in log_dict and "v" in log_dict:
-                # Fallback to u, v
-                u_i_raw = log_dict["u"]
-                v_i_raw = log_dict["v"]
-                if isinstance(u_i_raw, torch.Tensor):
-                    u_i = u_i_raw.to(device=device, dtype=dtype)
+            f_i, g_i = get_potentials(log_dict, reg_i)
+
+            # Retry logic if non-finite
+            if not torch.isfinite(f_i).all() or not torch.isfinite(g_i).all():
+                logger.warning(
+                    f"POT sinkhorn returned non-finite potentials for batch index {i}. "
+                    "Retrying with double iterations."
+                )
+                out = ot.sinkhorn(
+                    a=p[i],
+                    b=q[i],
+                    M=Cb[i],
+                    reg=reg_i,
+                    numItermax=int(2 * max_iter),  # Double iterations
+                    stopThr=float(stopThr),
+                    method=method,
+                    log=True,
+                )
+                if isinstance(out, tuple) and len(out) == 2:
+                    P_i, log_dict = out
                 else:
-                    u_i = torch.as_tensor(u_i_raw, device=device, dtype=dtype)
-                if isinstance(v_i_raw, torch.Tensor):
-                    v_i = v_i_raw.to(device=device, dtype=dtype)
-                else:
-                    v_i = torch.as_tensor(v_i_raw, device=device, dtype=dtype)
-                
-                # f = eps * log(u)
-                f[i] = reg_i * torch.log(u_i + 1e-16)
-                g[i] = reg_i * torch.log(v_i + 1e-16)
-            # Check for non-finite potentials
-            if not torch.isfinite(f[i]).all() or not torch.isfinite(g[i]).all():
-                logger.warning(f"POT sinkhorn returned non-finite potentials for batch index {i}. Stabilizing.")
-                f[i] = torch.nan_to_num(f[i], nan=0.0, posinf=1e6, neginf=-1e6)
-                g[i] = torch.nan_to_num(g[i], nan=0.0, posinf=1e6, neginf=-1e6)
+                    P_i, log_dict = out, {}
+                f_i, g_i = get_potentials(log_dict, reg_i)
+
+            # Final stabilization
+            if not torch.isfinite(f_i).all() or not torch.isfinite(g_i).all():
+                logger.warning(f"POT sinkhorn still non-finite after retry for batch index {i}. Stabilizing.")
+                f_i = torch.nan_to_num(f_i, nan=0.0, posinf=1e6, neginf=-1e6)
+                g_i = torch.nan_to_num(g_i, nan=0.0, posinf=1e6, neginf=-1e6)
+
+            P[i] = P_i.to(device=device, dtype=dtype) if isinstance(P_i, torch.Tensor) else torch.as_tensor(P_i, device=device, dtype=dtype)
+            f[i], g[i] = f_i, g_i
 
         except Exception as e:
             msg = (

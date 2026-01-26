@@ -13,7 +13,7 @@
 3. **Sinkhorn Gradients**: Fixed `SinkhornPOTLoss` and `SinkhornEnvelopeLoss` to use correct dual potential gradients (non-zero consistency verified).
 4. **Plotting**:
     - **PR Curves**: Added "Luck" baseline (horizontal line at positive prevalence).
-    - **Regret Plots**: Added "Naive" baseline (EMA of min(cost of approve-all, cost of decline-all)).
+    - **Regret Plots**: Added "Naive" baseline (smoothed average of min(cost of approve-all, cost of decline-all)).
 
 ## Results (Quick Verification Run)
 The benchmark run is currently executing in the background. Once complete, the following figures will verify the fixes.
@@ -21,20 +21,20 @@ The benchmark run is currently executing in the background. Once complete, the f
 ### Cross Entropy Baseline
 Precision-Recall Curve (with "Luck" baseline) and Regret History.
 
-![Cross Entropy PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_pr.png)
-![Cross Entropy Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/cross_entropy_regret.png)
+![Cross Entropy PR (the higher, the better)](assets/cross_entropy_pr.png)
+![Cross Entropy Regret (the lower, the better)](assets/cross_entropy_regret.png)
 
 ### Sinkhorn POT (Fixed)
 Precision-Recall Curve and Regret History showing valid learning (non-zero gradients).
 
-![Sinkhorn POT PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_pr.png)
-![Sinkhorn POT Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/pot_regret.png)
+![Sinkhorn POT PR (the higher, the better)](assets/pot_pr.png)
+![Sinkhorn POT Regret (the lower, the better)](assets/pot_regret.png)
 
 ### Sinkhorn Envelope (Fixed)
 Should match POT results closely.
 
-![Sinkhorn Envelope PR (the higher, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_pr.png)
-![Sinkhorn Envelope Regret (the lower, the better)](/Users/warithharchaoui/.gemini/antigravity/brain/dcb1c85b-7425-40e7-96eb-ab766e36f986/images/envelope_regret.png)
+![Sinkhorn Envelope PR (the higher, the better)](assets/envelope_pr.png)
+![Sinkhorn Envelope Regret (the lower, the better)](assets/envelope_regret.png)
 
 ## How to Reproduce
 Run the full benchmark with temporal split (approx. several hours on CPU):

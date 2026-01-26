@@ -74,7 +74,7 @@ from examples.tabular_models import (
 )
 from examples.utils import (
     TrainingState,
-    ema_update,
+    smooth_update,
     get_device,
     plot_metric_trajectory,
     plot_precision_recall_curve,
@@ -534,7 +534,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     state: TrainingState,
-    ema_buf: Dict[str, Optional[float]],
+    smooth_buf: Dict[str, Optional[float]],
     epoch_next: int,
     model_config: Dict[str, Any],
     run_config: Dict[str, Any],
@@ -553,8 +553,8 @@ def save_checkpoint(
         Optimizer to save.
     state:
         TrainingState (metrics history).
-    ema_buf:
-        EMA buffers (last EMA values).
+    smooth_buf:
+        Smoothing buffers (last smoothed values).
     epoch_next:
         Next epoch index to run (resume will start here).
     model_config:
@@ -571,7 +571,7 @@ def save_checkpoint(
         "state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "training_state": training_state_to_dict(state),
-        "ema_buf": {k: (None if v is None else float(v)) for k, v in ema_buf.items()},
+        "smooth_buf": {k: (None if v is None else float(v)) for k, v in smooth_buf.items()},
         "model_config": dict(model_config),
         "run_config": dict(run_config),
         "best_score": None if best_score is None else float(best_score),
@@ -613,11 +613,11 @@ def save_state_csvs(state: TrainingState, out_dir: Path) -> None:
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if state.train_ema_iters:
-        train_df = pd.DataFrame({"iter": state.train_ema_iters})
-        for k, v in state.train_ema.items():
+    if state.train_smoothed_iters:
+        train_df = pd.DataFrame({"iter": state.train_smoothed_iters})
+        for k, v in state.train_smoothed.items():
             train_df[k] = v
-        train_df.to_csv(out_dir / "train_ema_metrics.csv", index=False)
+        train_df.to_csv(out_dir / "train_smoothed_metrics.csv", index=False)
 
     if state.val_iters:
         val_df = pd.DataFrame({"iter": state.val_iters})
@@ -641,7 +641,7 @@ def train_one(
     epochs_additional: int,
     quick: bool,
     eval_every: int,
-    ema_alpha: float,
+    smoothing_alpha: float,
     epsilon_mode: str,
     epsilon_scale: float,
     epsilon: Optional[float],
@@ -656,7 +656,7 @@ def train_one(
     checkpoint_every_epochs: int,
     run_config: Dict[str, Any],
     model_config: Dict[str, Any],
-) -> Dict[str, float]:
+) -> Dict[str, Dict[str, float]]:
     """
     Train one method, with optional resume from checkpoint.
 
@@ -673,7 +673,7 @@ def train_one(
     # Restore from checkpoint
     # -----------------------
     state = TrainingState(batch_size=int(train_loader.batch_size or 0))
-    ema_buf: Dict[str, Optional[float]] = {
+    smooth_buf: Dict[str, Optional[float]] = {
         "train_expected_opt_regret": None,
         "train_realized_regret": None,
     }
@@ -686,7 +686,7 @@ def train_one(
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
 
         state = training_state_from_dict(ckpt["training_state"])
-        ema_buf = {k: (None if v is None else float(v)) for k, v in (ckpt.get("ema_buf") or {}).items()}
+        smooth_buf = {k: (None if v is None else float(v)) for k, v in (ckpt.get("smooth_buf") or ckpt.get("ema_buf") or {}).items()}
         epoch_start = int(ckpt.get("epoch_next", 0))
         best_score = ckpt.get("best_score", None)
 
@@ -781,12 +781,12 @@ def train_one(
 
             state.current_iter += 1
 
-            # Iteration-level metrics (EMA)
+            # Iteration-level metrics (Smoothing)
             train_metrics = batch_regret_metrics(scores, y, C)
-            state.train_ema_iters.append(state.current_iter)
+            state.train_smoothed_iters.append(state.current_iter)
             for k, v in train_metrics.items():
-                ema_buf[k] = ema_update(ema_buf.get(k), float(v), alpha=ema_alpha)
-                state.train_ema.setdefault(k, []).append(float(ema_buf[k]))
+                smooth_buf[k] = smooth_update(smooth_buf.get(k), float(v), alpha=smoothing_alpha)
+                state.train_smoothed.setdefault(k, []).append(float(smooth_buf[k]))
 
             pbar.set_postfix({
                 "loss": f"{float(loss.item()):.4f}",
@@ -815,7 +815,7 @@ def train_one(
                     model=model,
                     optimizer=optimizer,
                     state=state,
-                    ema_buf=ema_buf,
+                    smooth_buf=smooth_buf,
                     epoch_next=epoch,  # we are still inside epoch
                     model_config=model_config,
                     run_config=run_config,
@@ -843,58 +843,62 @@ def train_one(
         scheduler.step()
         logging.info("[%s] LR: %.2e", loss_name, scheduler.get_last_lr()[0])
 
-        # Train EMA plots
-        if "train_expected_opt_regret" in state.train_ema:
-            # Baseline: Only Approve All (as requested by user)
+        # Train Smoothing plots
+        if "train_expected_opt_regret" in state.train_smoothed:
             baselines = {}
-            if "train_naive_approve_expected_regret" in state.train_ema:
-                baselines["Naive (Approve)"] = state.train_ema["train_naive_approve_expected_regret"]
-
+            if "train_naive_approve_expected_regret" in state.train_smoothed:
+                baselines["Naive (Approve)"] = state.train_smoothed["train_naive_approve_expected_regret"]
+            if "train_naive_decline_expected_regret" in state.train_smoothed:
+                baselines["Naive (Decline)"] = state.train_smoothed["train_naive_decline_expected_regret"]
+            
             plot_metric_trajectory(
-                iters=state.train_ema_iters,
-                values=state.train_ema["train_expected_opt_regret"],
+                iters=state.train_smoothed_iters,
+                values=state.train_smoothed["train_expected_opt_regret"],
                 out_path=run_dir / "train_expected_opt_regret.png",
-                title=f"{loss_name} — Train expected optimal regret (EMA)",
-                ylabel="€ regret (expected, optimal action)",
+                title=f"{loss_name} — Train expected optimal regret (Smoothed)",
+                ylabel="Expected Regret",
                 epoch_iters=state.epoch_iters,
                 baselines=baselines,
             )
-        if "train_realized_regret" in state.train_ema:
+
+        if "train_realized_regret" in state.train_smoothed:
             baselines_real = {}
-            if "train_naive_approve_realized_regret" in state.train_ema:
-                baselines_real["Naive (Approve)"] = state.train_ema["train_naive_approve_realized_regret"]
+            if "train_naive_approve_realized_regret" in state.train_smoothed:
+                baselines_real["Naive (Approve)"] = state.train_smoothed["train_naive_approve_realized_regret"]
+            if "train_naive_decline_realized_regret" in state.train_smoothed:
+                baselines_real["Naive (Decline)"] = state.train_smoothed["train_naive_decline_realized_regret"]
 
             plot_metric_trajectory(
-                iters=state.train_ema_iters,
-                values=state.train_ema["train_realized_regret"],
+                iters=state.train_smoothed_iters,
+                values=state.train_smoothed["train_realized_regret"],
                 out_path=run_dir / "train_realized_regret.png",
-                title=f"{loss_name} — Train realized regret (EMA)",
-                ylabel="€ regret (realized)",
+                title=f"{loss_name} — Train realized regret (Smoothed)",
+                ylabel="Realized Regret",
                 epoch_iters=state.epoch_iters,
                 baselines=baselines_real,
             )
+
+        if "train_pr_auc" in state.train_smoothed:
+            # Baseline is luck prevalence
+            baselines_pr = {"Luck": [train_prevalence] * len(state.train_smoothed_iters)}
             
-        if "train_pr_auc" in state.train_ema:
-            # Baselines for PR-AUC: 
-            # Naive (Decline) = prevalence
-            # Naive (Approve) = 0
-            n_iters = len(state.train_ema_iters)
-            baselines_pr = {
-                "Naive (Decline)": [train_prevalence] * n_iters,
-                "Naive (Approve)": [0.0] * n_iters,
-            }
+            n_iters = len(state.train_smoothed_iters)
+            # Naive (Decline) = perfect recall (1.0) but only for the positive class.
+            # Precision for Naive (Decline) = prevalence.
+            baselines_pr["Naive (Decline)"] = [train_prevalence] * n_iters
+            # Naive (Approve) = zero recall for positive class. Precision = 0.
+            baselines_pr["Naive (Approve)"] = [0.0] * n_iters
 
             plot_metric_trajectory(
-                iters=state.train_ema_iters,
-                values=state.train_ema["train_pr_auc"],
+                iters=state.train_smoothed_iters,
+                values=state.train_smoothed["train_pr_auc"],
                 out_path=run_dir / "train_pr_auc.png",
-                title=f"{loss_name} — Train PR-AUC (EMA)",
+                title=f"{loss_name} — Train PR-AUC (Smoothed)",
                 ylabel="PR-AUC",
                 epoch_iters=state.epoch_iters,
                 baselines=baselines_pr,
-                y_quantile_max=None,
+                y_quantile_max=None
             )
-
         # Validation (Subset) plots
         if state.val_iters:
             if "pr_auc" in state.val_points:
@@ -911,7 +915,7 @@ def train_one(
                     ylabel="PR-AUC",
                     epoch_iters=state.epoch_iters,
                     baselines=baselines_val_pr,
-                    y_quantile_max=None,
+                    y_quantile_max=None
                 )
             if "expected_opt_regret" in state.val_points:
                 # Baseline: Only Approve All
@@ -927,6 +931,7 @@ def train_one(
                     ylabel="€ regret (expected, optimal action)",
                     epoch_iters=state.epoch_iters,
                     baselines=baselines_val,
+                    y_quantile_max=None
                 )
             if "realized_regret" in state.val_points:
                 # Baseline: Only Approve All
@@ -941,7 +946,8 @@ def train_one(
                     title=f"{loss_name} — Validation realized regret vs iteration",
                     ylabel="€ regret (realized)",
                     epoch_iters=state.epoch_iters,
-                    baselines=baselines_val_real,
+                    baselines=baselines_val_real,   
+                    y_quantile_max=None
                 )
 
         # PR curve on full validation
@@ -979,7 +985,7 @@ def train_one(
                 model=model,
                 optimizer=optimizer,
                 state=state,
-                ema_buf=ema_buf,
+                smooth_buf=smooth_buf,
                 epoch_next=epoch + 1,
                 model_config=model_config,
                 run_config=run_config,
@@ -993,7 +999,7 @@ def train_one(
                 model=model,
                 optimizer=optimizer,
                 state=state,
-                ema_buf=ema_buf,
+                smooth_buf=smooth_buf,
                 epoch_next=epoch + 1,
                 model_config=model_config,
                 run_config=run_config,
@@ -1006,14 +1012,17 @@ def train_one(
         model=model,
         optimizer=optimizer,
         state=state,
-        ema_buf=ema_buf,
+        smooth_buf=smooth_buf,
         epoch_next=target_epochs,
         model_config=model_config,
         run_config=run_config,
         best_score=best_score,
     )
 
-    return eval_on_loader(model, val_loader, device)
+    final_val = eval_on_loader(model, val_loader, device)
+    final_train = {k: float(v) if v is not None else 0.0 for k, v in smooth_buf.items()}
+    
+    return {"train": final_train, "val": final_val}
 
 
 # =============================================================================
@@ -1093,7 +1102,7 @@ def main() -> None:
 
     # Iteration-based evaluation / smoothing
     parser.add_argument("--eval-every", type=int, default=500, help="Validation eval period in iterations (0 disables)")
-    parser.add_argument("--ema-alpha", type=float, default=0.05, help="EMA alpha for train-batch metrics")
+    parser.add_argument("--smoothing-alpha", type=float, default=0.05, help="Smoothing alpha for train-batch metrics")
     parser.add_argument("--val-subset-size", type=int, default=20000, help="Validation subset size for iteration plots")
 
     # Checkpointing
@@ -1279,7 +1288,6 @@ def main() -> None:
     run_config["weight_median"] = float(w_median)
 
     results: Dict[str, Dict[str, float]] = {}
-
     for loss_name in methods:
         run_dir = out_root / str(loss_name)
         model = TabularRiskModel(model_cfg).to(device)
@@ -1289,7 +1297,7 @@ def main() -> None:
             weight_decay=float(getattr(args, "weight_decay", 0.01)),
         )
         try:
-            final_metrics = train_one(
+            metrics = train_one(
                 run_dir=run_dir,
                 loss_name=loss_name,
                 model=model,
@@ -1303,7 +1311,7 @@ def main() -> None:
                 epochs_additional=int(args.epochs),
                 quick=bool(args.quick),
                 eval_every=int(args.eval_every),
-                ema_alpha=float(args.ema_alpha),
+                smoothing_alpha=float(args.smoothing_alpha),
                 epsilon_mode=str(args.epsilon_mode),
                 epsilon_scale=float(args.epsilon_scale),
                 epsilon=args.epsilon,
@@ -1319,7 +1327,13 @@ def main() -> None:
                 run_config=run_config,
                 model_config=model_config_dict,
             )
-            results[loss_name] = final_metrics
+            # Merge train and val into a single row
+            row = metrics["train"].copy()
+            # Prefix validation metrics
+            for k, v in metrics["val"].items():
+                row[f"val_{k}"] = v
+            
+            results[loss_name] = row
         except ImportError as e:
             logging.error("[%s] Skipped (missing dependency): %s", loss_name, str(e))
 
@@ -1327,9 +1341,10 @@ def main() -> None:
         summary = pd.DataFrame(results).T
         summary_path = out_root / "summary.csv"
         summary.to_csv(summary_path, index=True)
-        logging.info("Saved summary to: %s", summary_path)
+        logging.info("Saved central summary to: %s", summary_path)
+        
         with pd.option_context("display.max_columns", 50, "display.width", 140):
-            logging.info("Final summary:\n%s", summary)
+            logging.info("Final Summary (Train + Val):\n%s", summary)
 
     logging.info("Done.")
 
