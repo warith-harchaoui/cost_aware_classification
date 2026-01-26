@@ -244,10 +244,11 @@ def _pot_sinkhorn_plan(
                 # f = eps * log(u)
                 f[i] = reg_i * torch.log(u_i + 1e-16)
                 g[i] = reg_i * torch.log(v_i + 1e-16)
-            else:
-                logger.warning(f"POT sinkhorn log missing potentials for batch {i}. Gradients partial.")
-                f[i].fill_(0.0)
-                g[i].fill_(0.0)
+            # Check for non-finite potentials
+            if not torch.isfinite(f[i]).all() or not torch.isfinite(g[i]).all():
+                logger.warning(f"POT sinkhorn returned non-finite potentials for batch index {i}. Stabilizing.")
+                f[i] = torch.nan_to_num(f[i], nan=0.0, posinf=1e6, neginf=-1e6)
+                g[i] = torch.nan_to_num(g[i], nan=0.0, posinf=1e6, neginf=-1e6)
 
         except Exception as e:
             msg = (
@@ -330,13 +331,13 @@ def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tenso
     """
     tiny = torch.as_tensor(1e-12, device=P.device, dtype=P.dtype)
 
-    # Clamp to keep logs finite
-    P_safe = torch.clamp(P, min=tiny)
-    p_safe = torch.clamp(p, min=tiny)
-    q_safe = torch.clamp(q, min=tiny)
+    # Clamp to keep logs finite and handle NaNs
+    P_safe = torch.nan_to_num(P, nan=1e-12).clamp(min=tiny)
+    p_safe = torch.nan_to_num(p, nan=1e-12).clamp(min=tiny)
+    q_safe = torch.nan_to_num(q, nan=1e-12).clamp(min=tiny)
 
     # <P, C>
-    cost_term = (P * C).sum(dim=(1, 2))
+    cost_term = (P_safe * C).sum(dim=(1, 2))
 
     # KL(P || p ⊗ q)
     logP = torch.log(P_safe)
@@ -432,7 +433,9 @@ class SinkhornPOTLoss(CostAwareLoss):
         # -------------------------
         # Predicted distribution p (grad flows here)
         # -------------------------
-        p = torch.softmax(scores, dim=1)
+        # Clamp logits for numerical stability before softmax
+        scores_stab = torch.clamp(scores, min=-100.0, max=100.0)
+        p = torch.softmax(scores_stab, dim=1)
 
         # -------------------------
         # Target distribution q (one-hot + optional smoothing)
@@ -510,5 +513,6 @@ class SinkhornPOTLoss(CostAwareLoss):
         # Combined graft
         graft = grad_term_f + correction_term
         
-        # Identity subtraction to detach value
-        return primal_val.detach() + graft - graft.detach()
+        # Identity subtraction to detach value, with NaN safeguard
+        res = primal_val.detach() + graft - graft.detach()
+        return torch.nan_to_num(res, nan=0.0)

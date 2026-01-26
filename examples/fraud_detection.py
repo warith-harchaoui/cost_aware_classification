@@ -244,10 +244,8 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
     # But let's be safe and subtract min entry.
     opt_realized = torch.minimum(cost_approve_all, cost_decline_all).mean().item()
 
-    # PR-AUC for the batch (if both classes present)
-    # y is not passed to this function? It is.
-    # Check if we have both classes
-    if y.float().std() == 0:
+    # PR-AUC for the batch (if both classes present and predictions are finite)
+    if y.float().std() == 0 or not torch.isfinite(prob_fraud).all():
         batch_pr_auc = float("nan")
     else:
         # sklearn avg precision needs cpu numpy

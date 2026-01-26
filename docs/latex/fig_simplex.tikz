@@ -1,15 +1,55 @@
-\begin{tikzpicture}[scale=1.5]
-    \node[regular polygon, regular polygon sides=3, draw, minimum size=4cm] (simplex) at (0,0) {};
-    \node[anchor=south] at (simplex.corner 1) {Class 1};
-    \node[anchor=north east] at (simplex.corner 2) {Class 2};
-    \node[anchor=north west] at (simplex.corner 3) {Class 3};
-    
-    % Draw some decision regions
-    \draw[dashed] (simplex.center) -- (simplex.side 1);
-    \draw[dashed] (simplex.center) -- (simplex.side 2);
-    \draw[dashed] (simplex.center) -- (simplex.side 3);
-    
-    \node at (0, 0.5) {$r_1 < r_2, r_3$};
-    \node at (-0.5, -0.5) {$r_2 < r_1, r_3$};
-    \node at (0.5, -0.5) {$r_3 < r_1, r_2$};
+\begin{tikzpicture}[scale=1.45, >=Latex, font=\small]
+  % --- Simplex vertices (explicit coords give you full control)
+  \coordinate (A) at (0,1.25);
+  \coordinate (B) at (-1.2,-0.85);
+  \coordinate (C) at (1.2,-0.85);
+
+  % --- Triangle (simplex)
+  \draw[thick] (A)--(B)--(C)--cycle;
+
+  % --- Labels
+  \node[anchor=south]     at (A) {Class 1};
+  \node[anchor=north east] at (B) {Class 2};
+  \node[anchor=north west] at (C) {Class 3};
+
+  % --- "Geometry of labels" cue: highlight the high-regret confusion edge
+  % e.g., confusing 2 <-> 3 is expensive => make that edge look "long / heavy"
+  \draw[line width=2.2pt] (B)--(C);
+  \node[anchor=north] at ($(B)!0.5!(C)$) {\scriptsize high-regret edge};
+
+  % --- Add a faint "metric field" inside (elliptic contours)
+  \foreach \t in {0.25,0.45,0.65,0.85} {
+    \draw[gray!55] ($(A)!\t!(B)$) .. controls ($(0,0)$) .. ($(A)!\t!(C)$);
+  }
+  \node[gray!70] at (0,0.15) {\scriptsize cost-warped geometry};
+
+  % --- Decision boundaries: not meeting at barycenter (anisotropic / shifted)
+  % These curves suggest regions move depending on C
+  \draw[dashed, thick]
+    ($(A)!0.62!(B)$) .. controls (-0.25,0.35) .. ($(B)!0.55!(C)$);
+  \draw[dashed, thick]
+    ($(A)!0.62!(C)$) .. controls (0.25,0.35) .. ($(B)!0.45!(C)$);
+  \draw[dashed, thick]
+    ($(A)!0.40!(B)$) .. controls (0,-0.05) .. ($(A)!0.40!(C)$);
+
+  % --- Region annotations
+  \node at (0,0.72) {$r_1<r_2,r_3$};
+  \node at (-0.72,-0.55) {$r_2<r_1,r_3$};
+  \node at (0.72,-0.55) {$r_3<r_1,r_2$};
+
+  % --- Transport / mass movement arrows (OT intuition)
+  \coordinate (P) at (0.05,0.1);
+  \fill (P) circle (1.2pt);
+  \node[anchor=west] at ($(P)+(0.08,0)$) {\scriptsize $p_\theta(x)$};
+
+  % Arrows towards vertices with different "effort" thickness
+  \draw[->, very thick] (P) to[bend left=8]  node[midway, right] {\scriptsize costly} (B);
+  \draw[->, thick]      (P) to[bend right=6] node[midway, left]  {\scriptsize mild}   (A);
+  \draw[->, thick]      (P) to[bend right=10] node[midway, right] {\scriptsize mild}  (C);
+
+  % --- Mini-legend for cost matrix C
+  \node[draw, rounded corners, fill=white, opacity=0.9, text opacity=1, align=left]
+    at (2.45,0.75) {\scriptsize \textbf{Label geometry}\\[-2pt]
+    \scriptsize ground cost $C_{ij}$\\[-2pt]
+    \scriptsize $\Rightarrow$ warped simplex};
 \end{tikzpicture}

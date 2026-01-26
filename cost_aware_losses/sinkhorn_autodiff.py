@@ -131,11 +131,12 @@ def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tenso
         Objective values per example (B,).
     """
     tiny = torch.as_tensor(1e-12, device=P.device, dtype=P.dtype)
-    P_safe = torch.clamp(P, min=tiny)
-    p_safe = torch.clamp(p, min=tiny)
-    q_safe = torch.clamp(q, min=tiny)
+    # Clamp to handle NaNs and extreme values
+    P_safe = torch.nan_to_num(P, nan=1e-12).clamp(min=tiny)
+    p_safe = torch.nan_to_num(p, nan=1e-12).clamp(min=tiny)
+    q_safe = torch.nan_to_num(q, nan=1e-12).clamp(min=tiny)
 
-    cost_term = (P * C).sum(dim=(1, 2))
+    cost_term = (P_safe * C).sum(dim=(1, 2))
 
     # KL term: Σ_ij P_ij (log P_ij - log p_i - log q_j)
     logP = torch.log(P_safe)
@@ -143,8 +144,6 @@ def _entropy_kl_objective(P: Tensor, p: Tensor, q: Tensor, eps: Tensor, C: Tenso
     logq = torch.log(q_safe).unsqueeze(1)
     kl = (P_safe * (logP - logp - logq)).sum(dim=(1, 2))
 
-    if eps.ndim == 0:
-        return cost_term + eps * kl
     return cost_term + eps * kl
 
 
@@ -201,7 +200,9 @@ class SinkhornFullAutodiffLoss(CostAwareLoss):
         B, K = scores.shape
         eps = self.compute_epsilon(Cb)
 
-        p = torch.softmax(scores, dim=1)
+        # Clamp logits for stability
+        scores_stab = torch.clamp(scores, min=-100.0, max=100.0)
+        p = torch.softmax(scores_stab, dim=1)
 
         q = torch.zeros((B, K), device=scores.device, dtype=scores.dtype)
         q.scatter_(1, targets.view(-1, 1), 1.0)
@@ -212,4 +213,5 @@ class SinkhornFullAutodiffLoss(CostAwareLoss):
 
         # Full autodiff plan.
         P = _sinkhorn_plan(p, q, Cb, eps, max_iter=self.max_iter)
-        return _entropy_kl_objective(P, p, q, eps, Cb)
+        res = _entropy_kl_objective(P, p, q, eps, Cb)
+        return torch.nan_to_num(res, nan=0.0)
