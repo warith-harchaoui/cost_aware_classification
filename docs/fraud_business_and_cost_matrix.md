@@ -80,10 +80,11 @@ This "$M$" can be interpreted as a *normalized* positive value proportional to a
 
 **Decline** (bad outcome):
 ```math
-V_{\text{legit},\,\text{decline}}(M) = -\rho_{FD} \, M
+V_{\text{legit},\,\text{decline}}(M) = M -\rho_{FD} \, M
 ```
 
-where $\rho_{FD}\ge 0$ captures the *relative friction / foregone value* from declining a legit transaction.  
+where $\rho_{FD}\in [0, 1]$ captures the *relative friction / foregone value* from declining a legit transaction.
+  
 This captures lost margin, customer churn, support cost, etc.
 
 **Typical value:** $\rho_{FD} = 0.10$ (10% additional loss beyond the sale itself)
@@ -127,13 +128,13 @@ Putting the above together:
 V(M) \;=\;
 \begin{array}{c|cc}
 \text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
-\text{legit} & M & -\rho_{FD} M \\
+\text{legit} & M & M -\rho_{FD} M \\
 \text{fraud} & -L_{\text{fraud}}(M) & 0
 \end{array}
 ```
 
 **Interpretation:**
-- For legit: approving is best (typically), declining is harmful by a factor $\rho_{FD}M$
+- For legit: approving is best (typically), declining is harmful by a factor $\rho_{FD}M$ (corresponding to friction because of being annoyed by verification)
 - For fraud: declining is best (value 0), approving is harmful by $L_{\text{fraud}}(M)$
 
 ---
@@ -142,14 +143,14 @@ V(M) \;=\;
 
 Apply the geometry-of-regret rule:
 
-**If truth is legit:** $a^*(\text{legit})=\text{approve}$ (since $M > -\rho_{FD}M$)
+**If truth is legit:** $a^*(\text{legit})=\text{approve}$ (since $M > M -\rho_{FD}M$ for $\rho_{FD}>0$)
 
 ```math
 C_{\text{legit},\,\text{approve}} = M - M = 0
 ```
 
 ```math
-C_{\text{legit},\,\text{decline}} = M - (-\rho_{FD}M) = (1+\rho_{FD})M
+C_{\text{legit},\,\text{decline}} = M - (M -\rho_{FD}M) = \rho_{FD}M
 ```
 
 **If truth is fraud:** $a^*(\text{fraud})=\text{decline}$ (since $0 > -L_{\text{fraud}}(M)$)
@@ -166,11 +167,10 @@ C_{\text{fraud},\,\text{decline}} = 0 - 0 = 0
 
 ```math
 C(M) \;=\;
-\begin{array}{c|cc}
-\text{Reality}\backslash\text{Action} & \text{approve} & \text{decline}\\ \hline
-\text{legit} & 0 & (1+\rho_{FD})M \\
-\text{fraud} & L_{\text{fraud}}(M) & 0
-\end{array}
+\begin{pmatrix}
+0 & \rho_{FD}M \\
+L_{\text{fraud}}(M) & 0
+\end{pmatrix}
 ```
 
 This is the matrix you should implement per transaction.
@@ -188,7 +188,7 @@ then the per-example cost tensor $C_i\in\mathbb{R}^{2\times 2}$ should be:
 ```math
 C_i =
 \begin{pmatrix}
-0 & (1+\rho_{FD})M_i\\
+0 & \rho_{FD}M_i\\
 L_{\text{fraud}}(M_i) & 0
 \end{pmatrix}
 ```
@@ -223,7 +223,7 @@ def build_cost_matrix(amount: np.ndarray,
         Cost matrices, shape (N, 2, 2)
     """
     M = amount.astype(np.float32)
-    c_fd = (1.0 + rho_fd) * M  # Cost of declining legit
+    c_fd = rho_fd * M  # Cost of declining legit
     c_cb = lambda_cb * M + F_cb  # Cost of approving fraud
     
     C = np.zeros((M.shape[0], 2, 2), dtype=np.float32)
@@ -245,23 +245,23 @@ Given a model's predicted probability $p_i = \mathbb{P}(y=1\mid x_i)$ for fraud:
 
 **Expected cost if decline:**
 ```math
-\mathbb{E}[C \mid a=\text{decline}] = (1-p_i) \cdot (1+\rho_{FD})M_i
+\mathbb{E}[C \mid a=\text{decline}] = (1-p_i) \cdot \rho_{FD}M_i
 ```
 
 **Decision rule: Decline if and only if:**
 ```math
-(1-p_i)(1+\rho_{FD})M_i < p_i L_{\text{fraud}}(M_i)
+(1-p_i)\rho_{FD}M_i < p_i L_{\text{fraud}}(M_i)
 ```
 
 Rearranging:
 ```math
-p_i > \frac{(1+\rho_{FD})M_i}{(1+\rho_{FD})M_i + L_{\text{fraud}}(M_i)}
+p_i > \frac{\rho_{FD}M_i}{\rho_{FD}M_i + L_{\text{fraud}}(M_i)}
 ```
 
 **Special case:** If $L_{\text{fraud}}(M)=\lambda_{cb}M$ and $F_{cb}=0$, the $M$ cancels and the threshold becomes **constant:**
 
 ```math
-p_i > \frac{1+\rho_{FD}}{(1+\rho_{FD})+\lambda_{cb}}
+p_i > \frac{\rho_{FD}}{\rho_{FD}+\lambda_{cb}}
 ```
 
 **With $F_{cb}>0$:** The threshold becomes **amount-dependent** (more realistic for fraud detection).
@@ -310,7 +310,7 @@ If you want "decline = review", replace the legit-decline regret by a constant:
 C_{\text{legit},\,\text{decline}} = c_{FP}
 ```
 
-**Note:** This deviates from the value-matrix derivation and removes amount dependence on the false-decline side. For apples-to-apples comparisons with the regret geometry, prefer the $(1+\rho_{FD})M$ form.
+**Note:** This deviates from the value-matrix derivation and removes amount dependence on the false-decline side. For apples-to-apples comparisons with the regret geometry, prefer the $\rho_{FD}M$ form.
 
 ---
 
@@ -381,7 +381,7 @@ For each transaction $i$ with amount $M_i$:
 
 **2. Compute regrets:**
 ```python
-c_fd_i = (1 + rho_fd) * M_i        # False decline cost
+c_fd_i = rho_fd * M_i        # False decline cost
 c_cb_i = lambda_cb * M_i + F_cb    # Chargeback cost
 ```
 
@@ -408,7 +408,7 @@ loss.backward()
 def optimal_decision(fraud_prob, amount, rho_fd=0.10, lambda_cb=1.5, F_cb=15):
     """Return True if should decline."""
     cost_approve = fraud_prob * (lambda_cb * amount + F_cb)
-    cost_decline = (1 - fraud_prob) * (1 + rho_fd) * amount
+    cost_decline = (1 - fraud_prob) * rho_fd * amount
     return cost_decline < cost_approve
 ```
 

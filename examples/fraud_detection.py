@@ -96,7 +96,7 @@ class BusinessParams:
 
     We use a regret construction consistent with an approve/decline value model:
 
-        C_legit,decline = (1 + rho_fd) * M
+        C_legit,decline = rho_fd * M
         C_fraud,approve = L_fraud(M) = lambda_cb * M + F_cb
 
     where M is TransactionAmt.
@@ -115,11 +115,11 @@ def build_cost_matrix(amount: np.ndarray, params: BusinessParams) -> np.ndarray:
     - action 0 = approve (predict legit), action 1 = decline (predict fraud)
 
     C_i =
-        [[0, (1+rho_fd) * M_i],
+        [[0, rho_fd * M_i],
          [lambda_cb * M_i + F_cb, 0]]
     """
     M = amount.astype(np.float32)
-    c_fd = (1.0 + params.rho_fd) * M
+    c_fd = params.rho_fd * M
     c_cb = params.lambda_cb * M + params.F_cb
 
     C = np.zeros((M.shape[0], 2, 2), dtype=np.float32)

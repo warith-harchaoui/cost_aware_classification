@@ -228,16 +228,7 @@ def compute_smart_architecture_defaults(
     layer1 = max(int(input_dim * 0.67), n_classes * 2)  # At least 2x output
     layer2 = max(int(input_dim * 0.33), n_classes * 2)  # At least 2x output
     
-    # # Round to nice numbers (multiples of 32 or 64 for GPU efficiency)
-    # def round_to_nice(x: int) -> int:
-    #     if x >= 256:
-    #         return ((x + 31) // 32) * 32  # Round to nearest 32
-    #     elif x >= 64:
-    #         return ((x + 15) // 16) * 16  # Round to nearest 16
-    #     else:
-    #         return ((x + 7) // 8) * 8  # Round to nearest 8
-
-    
+    # Round to nearest power of 2   
     layer1 = round_nearest_upper_power_of_2(layer1)
     layer2 = round_nearest_upper_power_of_2(layer2)
     
