@@ -37,6 +37,23 @@ PathLike = Union[str, Path]
 
 
 # =============================================================================
+# Graphics / Colors
+# =============================================================================
+
+# Standardized color palette (Apple-style / SF)
+COLORS = {
+    "red": "#FF3B30",
+    "orange": "#FF9500",
+    "yellow": "#FFCC00",
+    "green": "#28CD41",
+    "blue": "#007AFF",
+    "purple": "#AF52DE",
+    "pink": "#FF2D55",
+    "gray": "#8E8E93",
+}
+
+
+# =============================================================================
 # Logging / device
 # =============================================================================
 
@@ -217,7 +234,7 @@ def plot_metric_trajectory(
     val = np.asarray(list(values), dtype=float)
 
     plt.figure(figsize=(12, 4.5))
-    plt.plot(it, val, linewidth=2, color="#007AFF", label="Model")
+    plt.plot(it, val, linewidth=2, color=COLORS["blue"], label="Model")
 
     if baselines:
         for label, b_vals in baselines.items():
@@ -225,13 +242,13 @@ def plot_metric_trajectory(
             min_len = min(len(it), len(b_arr))
             
             # Map labels to specified colors
-            color = "gray"
+            color = COLORS["gray"]
             style = "--"
             if "Approve" in label:
-                color = "#28CD41"  # Green
+                color = COLORS["green"]
                 style = "--"
             elif "Decline" in label:
-                color = "#FF3B30"  # Red
+                color = COLORS["red"]
                 style = "--"
             
             plt.plot(it[:min_len], b_arr[:min_len], 
@@ -311,12 +328,12 @@ def plot_precision_recall_curve(
     plt.figure(figsize=(6, 5))
     
     label = f"AP={average_precision:.4f}" if average_precision is not None else None
-    plt.plot(recall, precision, linewidth=2, color="#007AFF", label=label, marker=".")
+    plt.plot(recall, precision, linewidth=2, color=COLORS["blue"], label=label, marker=".")
 
     if prevalence is not None:
-        # Standardized colors: Naive (Approve) Green, Naive (Decline) Red
-        plt.axhline(prevalence, color="#FF3B30", linestyle="--", label=f"Naive (Decline) [{prevalence:.4f}]")
-        plt.axhline(0.0, color="#28CD41", linestyle="--", label="Naive (Approve) [0.0000]")
+        # Standardized colors: Naive (Decline) Red, Naive (Approve) Green
+        plt.axhline(prevalence, color=COLORS["red"], linestyle="--", label=f"Naive (Decline) [{prevalence:.4f}]")
+        plt.axhline(0.0, color=COLORS["green"], linestyle="--", label="Naive (Approve) [0.0000]")
 
     plt.title(title)
     plt.xlabel("Recall")
@@ -424,6 +441,7 @@ def plot_temporal_split(
         bins=bin_edges,
         alpha=0.7,
         label="Train",
+        color=COLORS["blue"],
     )
 
     # Histogram for validation days
@@ -432,12 +450,13 @@ def plot_temporal_split(
         bins=bin_edges,
         alpha=0.7,
         label="Validation",
+        color=COLORS["orange"],
     )
 
     # A vertical line at the earliest validation timestamp is often a helpful split indicator.
     # This is optional but usually improves interpretability.
     val_start: float = float(val_days.min())
-    plt.axvline(val_start, linestyle="--", linewidth=1.5, alpha=0.8, label="Val start")
+    plt.axvline(val_start, linestyle="--", linewidth=1.5, alpha=0.8, color=COLORS["red"], label="Train / Val Split")
 
     # Labels and cosmetics
     plt.title("Temporal Split (TransactionDT)")
