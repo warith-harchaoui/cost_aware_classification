@@ -75,7 +75,7 @@ Declining incurs **friction / lost margin** (lost customer, lost sale, dissatisf
 V_{\text{legit},\,\text{approve}}(M) = M
 ```
 
-This "$M$" can be interpreted as a *normalized* positive value proportional to amount.  
+This $M$ can be interpreted as a *normalized* positive value proportional to amount.  
 (If you prefer "profit margin", replace $M$ by $m\cdot M$ where $m\in(0,1)$.)
 
 **Decline** (bad outcome):
