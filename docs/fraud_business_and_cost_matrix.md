@@ -1,6 +1,8 @@
 # Fraud Business Framing and Cost Matrix Construction (IEEE-CIS / Kaggle)
 
-**Author:** Warith Harchaoui <wharchaoui@nexton-group.com>
+**Authors:**
+Warith Harchaoui <wharchaoui@nexton-group.com>
+Laurent Pantanacce <wharchaoui@nexton-group.com>
 
 This document explains how to construct an **instance-dependent regret (cost) matrix** for the binary fraud decision problem (approve vs decline), starting from a **business value model**.
 
