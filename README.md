@@ -590,13 +590,7 @@ If you use this work in your research, please cite:
 # Benchmark all losses with optimized settings
 python -m examples.fraud_detection \
   --loss all \
-  --epochs 10 \
-  --batch-size 512 \
-  --lr 1e-4 \
-  --epsilon-mode offdiag_median \
-  --epsilon-scale 1.0 \
-  --sinkhorn-max-iter 100 \
-  --cacis-solver-iter 100 \
+  --epochs 15 \
   --run-id comprehensive_benchmark
 
 # Results will be in fraud_output/comprehensive_benchmark/<loss_name>/

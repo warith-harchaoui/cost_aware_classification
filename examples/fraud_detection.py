@@ -1296,6 +1296,10 @@ def main() -> None:
             lr=float(args.lr),
             weight_decay=float(getattr(args, "weight_decay", 0.01)),
         )
+        # Initialize bias to reflect prevalence (helps calibration and initial regret)
+        model.initialize_output_bias(train_prevalence)
+        logging.info("[%s] Initialized output bias to reflect train_prevalence=%.4f", loss_name, train_prevalence)
+
         try:
             metrics = train_one(
                 run_dir=run_dir,

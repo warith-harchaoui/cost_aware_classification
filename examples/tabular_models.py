@@ -117,6 +117,40 @@ class TabularRiskModel(nn.Module):
 
         raise ValueError(f"Unknown backbone: {config.backbone}")
 
+    @torch.no_grad()
+    def initialize_output_bias(self, target_prevalence: float) -> None:
+        """
+        Initialize the output layer's bias to reflect the target prevalence.
+        
+        This helps with calibration at the start of training, especially for
+        imbalanced datasets.
+        
+        Parameters
+        ----------
+        target_prevalence : float
+            The fraction of positive samples (class 1) in the training set.
+        """
+        if target_prevalence <= 0 or target_prevalence >= 1:
+            return
+
+        # For softmax (K=2): 
+        # P(y=1) = exp(z1) / (exp(z0) + exp(z1))
+        # If we set z0 = 0, then z1 = log(p / (1-p))
+        bias_val = float(torch.log(torch.tensor(target_prevalence / (1.0 - target_prevalence))))
+        
+        # Access the final linear layer
+        final_layer: nn.Linear
+        if isinstance(self.net, nn.Linear):
+            final_layer = self.net
+        else:
+            # For nn.Sequential, it's the last element
+            final_layer = self.net[-1] # type: ignore
+
+        if hasattr(final_layer, "bias") and final_layer.bias is not None:
+            # Initialize: class 0 bias to 0, class 1 bias to bias_val
+            final_layer.bias.zero_()
+            final_layer.bias[1] = bias_val
+
     def forward(self, x: Tensor) -> Tensor:
         """
         Forward pass.
