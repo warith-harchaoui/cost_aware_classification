@@ -225,8 +225,8 @@ def compute_smart_architecture_defaults(
     0.1
     """
     # Classic pyramid heuristic: start at ~2/3 input, compress to output
-    layer1 = max(int(2*input_dim * 0.67), n_classes * 2)  # At least 2x output
-    layer2 = max(int(2*input_dim * 0.33), n_classes * 2)  # At least 2x output
+    layer1 = max(int(input_dim * 0.67), n_classes * 2)  # At least 2x output
+    layer2 = max(int(input_dim * 0.33), n_classes * 2)  # At least 2x output
     
     # # Round to nice numbers (multiples of 32 or 64 for GPU efficiency)
     # def round_to_nice(x: int) -> int:

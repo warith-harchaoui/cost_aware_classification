@@ -13,7 +13,7 @@
 3. **Sinkhorn Gradients**: Fixed `SinkhornPOTLoss` and `SinkhornEnvelopeLoss` to use correct dual potential gradients (non-zero consistency verified).
 4. **Plotting**:
     - **PR Curves**: Added "Luck" baseline (horizontal line at positive prevalence).
-    - **Regret Plots**: Added "Naive" baseline (smoothed average of min(cost of approve-all, cost of decline-all)).
+    - **Regret Plots**: Added constant baselines (**Approve All** vs **Decline All**) which represent the business outcome of always choosing one action.
 
 ## Results (Quick Verification Run)
 The benchmark run is currently executing in the background. Once complete, the following figures will verify the fixes.

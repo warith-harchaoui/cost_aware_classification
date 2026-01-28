@@ -331,9 +331,9 @@ def plot_precision_recall_curve(
     plt.plot(recall, precision, linewidth=2, color=COLORS["blue"], label=label, marker=".")
 
     if prevalence is not None:
-        # Standardized colors: Naive (Decline) Red, Naive (Approve) Green
-        plt.axhline(prevalence, color=COLORS["red"], linestyle="--", label=f"Naive (Decline) [{prevalence:.4f}]")
-        plt.axhline(0.0, color=COLORS["green"], linestyle="--", label="Naive (Approve) [0.0000]")
+        # Standardized colors: Decline All (Red), Approve All (Green)
+        plt.axhline(prevalence, color=COLORS["red"], linestyle="--", label=f"Decline All [{prevalence:.4f}]")
+        plt.axhline(0.0, color=COLORS["green"], linestyle="--", label="Approve All [0.0000]")
 
     plt.title(title)
     plt.xlabel("Recall")
@@ -461,7 +461,7 @@ def plot_temporal_split(
     # Labels and cosmetics
     plt.title("Temporal Split (TransactionDT)")
     plt.xlabel("Days since first transaction")
-    plt.ylabel("Frequency")
+    plt.ylabel("Occurences")
     plt.legend(loc="upper right")
     plt.grid(True, alpha=0.3)
 

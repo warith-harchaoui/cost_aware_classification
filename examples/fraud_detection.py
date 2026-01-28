@@ -258,12 +258,11 @@ def batch_regret_metrics(scores: Tensor, y: Tensor, C: Tensor) -> Dict[str, floa
         "train_expected_opt_regret": mean_exp_opt,
         "train_realized_regret": float(realized.mean().item()),
         "train_pr_auc": float(batch_pr_auc),
-        # Naive baselines should not depend on model probabilities (which creates correlation).
-        # The best estimator for the "Expected Cost" of a fixed strategy is just its Average Realized Cost.
-        "train_naive_approve_expected_regret": float(cost_approve_all.mean().item()),
-        "train_naive_decline_expected_regret": float(cost_decline_all.mean().item()),
-        "train_naive_approve_realized_regret": float(cost_approve_all.mean().item()),
-        "train_naive_decline_realized_regret": float(cost_decline_all.mean().item()),
+        # Baseline strategies (fixed)
+        "train_approve_all_expected_regret": float(cost_approve_all.mean().item()),
+        "train_decline_all_expected_regret": float(cost_decline_all.mean().item()),
+        "train_approve_all_realized_regret": float(cost_approve_all.mean().item()),
+        "train_decline_all_realized_regret": float(cost_decline_all.mean().item()),
     }
 
 
@@ -280,11 +279,11 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
     realized_regrets: List[float] = []
     expected_opt_regrets: List[float] = []
     
-    # Accumulators for naive baselines
-    total_naive_approve_realized = 0.0
-    total_naive_decline_realized = 0.0
-    total_naive_approve_expected = 0.0
-    total_naive_decline_expected = 0.0
+    # Accumulators for baseline strategies
+    total_approve_all_realized = 0.0
+    total_decline_all_realized = 0.0
+    total_approve_all_expected = 0.0
+    total_decline_all_expected = 0.0
     total_samples = 0
 
     for x, y, C, _w in loader:
@@ -312,18 +311,17 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
         realized_regrets.extend(realized.detach().cpu().numpy().tolist())
         expected_opt_regrets.extend(exp_opt.detach().cpu().numpy().tolist())
         
-        # Naive accumulation
-        # Realized
+        # Realized (baseline strategies)
         c_app = C[torch.arange(B, device=device), y, 0]
         c_dec = C[torch.arange(B, device=device), y, 1]
         
-        total_naive_approve_realized += float(c_app.sum().item())
-        total_naive_decline_realized += float(c_dec.sum().item())
+        total_approve_all_realized += float(c_app.sum().item())
+        total_decline_all_realized += float(c_dec.sum().item())
         
-        # For "Expected" naive cost, we also use the Realized sum as the unbiased estimator.
+        # For "Expected" cost, we also use the Realized sum as the unbiased estimator.
         # This prevents the baseline from drifting with the model's probabilities.
-        total_naive_approve_expected += float(c_app.sum().item())
-        total_naive_decline_expected += float(c_dec.sum().item())
+        total_approve_all_expected += float(c_app.sum().item())
+        total_decline_all_expected += float(c_dec.sum().item())
         
         total_samples += B
 
@@ -334,22 +332,22 @@ def eval_on_loader(model: nn.Module, loader: DataLoader, device: torch.device) -
     
     # Averages
     if total_samples > 0:
-        naive_app_real = total_naive_approve_realized / total_samples
-        naive_dec_real = total_naive_decline_realized / total_samples
-        naive_app_exp = total_naive_approve_expected / total_samples
-        naive_dec_exp = total_naive_decline_expected / total_samples
+        app_all_real = total_approve_all_realized / total_samples
+        dec_all_real = total_decline_all_realized / total_samples
+        app_all_exp = total_approve_all_expected / total_samples
+        dec_all_exp = total_decline_all_expected / total_samples
     else:
-        naive_app_real = naive_dec_real = naive_app_exp = naive_dec_exp = float("nan")
+        app_all_real = dec_all_real = app_all_exp = dec_all_exp = float("nan")
 
     return {
         "pr_auc": pr_auc,
         "realized_regret": float(np.mean(realized_regrets)) if realized_regrets else float("nan"),
         "expected_opt_regret": float(np.mean(expected_opt_regrets)) if expected_opt_regrets else float("nan"),
         
-        "naive_approve_realized_cost": naive_app_real,
-        "naive_decline_realized_cost": naive_dec_real,
-        "naive_approve_expected_cost": naive_app_exp,
-        "naive_decline_expected_cost": naive_dec_exp,
+        "approve_all_realized_cost": app_all_real,
+        "decline_all_realized_cost": dec_all_real,
+        "approve_all_expected_cost": app_all_exp,
+        "decline_all_expected_cost": dec_all_exp,
     }
 
 

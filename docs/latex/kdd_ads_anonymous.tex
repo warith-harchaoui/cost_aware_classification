@@ -302,18 +302,18 @@ We benchmark \CACIS{} against established baselines using a large-scale e-commer
 We utilize the IEEE-CIS Fraud Detection dataset \citep{kaggle_ieee_cis_2019}, which comprises over 500,000 transactions across a six-month period. To ensure industrial relevance, we strictly adhere to a \emph{chronological splitting protocol}. Unlike random splits, which can leak future information into the model, we use the first four months for training, the fifth month for validation, and the final month for testing. This protocol mimics the real-world deployment scenario where a model trained on historical data must generalize to a shifting fraud landscape.
 
 \subsection{Performance Baselines and Statistical Rigor}
-We compare \CACIS{} against standard Cross-Entropy (CE), Weighted Cross-Entropy (WCE), and Focal Loss. We also introduce a "Naive Regret" benchmark, which represents the business outcome of the best constant strategy (e.g., "approve everyone" or "decline everyone" based on historical prevalence). All reported results are averaged over five independent seeds with different weight initializations to ensure statistical significance.
+We compare \CACIS{} against standard Cross-Entropy (CE), Weighted Cross-Entropy (WCE), and Focal Loss. We also introduce a ``Constant Baseline'' regret benchmark, which represents the business outcome of the best constant strategy (e.g., ``approve all'' or ``decline all'' based on historical prevalence). All reported results are averaged over five independent seeds with different weight initializations to ensure statistical significance.
 
 \subsection{Comparative Results}
 We compare \CACIS{} against Cross-Entropy (CE) and Weighted Cross-Entropy (WCE).
 
 \begin{table*}[t]
 \centering
-\caption{Detailed performance metrics on IEEE-CIS temporal test window (mean $\pm$ std over 5 seeds). Regret and Naive Regret are in units of \$ per 1k transactions.}
+\caption{Detailed performance metrics on IEEE-CIS temporal test window (mean $\pm$ std over 5 seeds). Regret and Constant Baseline Regret are in units of \$ per 1k transactions.}
 \label{tab:detailed_results}
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Method} & \textbf{Regret $\downarrow$} & \textbf{AUC-PR $\uparrow$} & \textbf{ECE $\downarrow$} & \textbf{Brier $\downarrow$} & \textbf{F1-Score $\uparrow$} & \textbf{Naive Regret $\uparrow$} \\
+\textbf{Method} & \textbf{Regret $\downarrow$} & \textbf{AUC-PR $\uparrow$} & \textbf{ECE $\downarrow$} & \textbf{Brier $\downarrow$} & \textbf{F1-Score $\uparrow$} & \textbf{Constant Regret $\uparrow$} \\
 \midrule
 Cross-Entropy & $9.42 \pm 0.12$ & $0.612 \pm 0.005$ & $0.015 \pm 0.002$ & $0.042 \pm 0.001$ & $0.58 \pm 0.01$ & $12.45$ \\
 Weighted CE & $9.15 \pm 0.15$ & $0.584 \pm 0.008$ & $0.042 \pm 0.005$ & $0.085 \pm 0.003$ & $0.55 \pm 0.02$ & $12.45$ \\
